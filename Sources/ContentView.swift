@@ -249,10 +249,12 @@ struct ContentView: View {
                     Text(themeMode.badgeTitle)
                         .font(.system(size: 10, weight: .black, design: .monospaced))
                         .foregroundColor(theme.buttonTextOnAccent)
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 8)
                         .frame(height: 30)
                         .background(theme.accentButter)
                 }
+                .buttonStyle(.plain)
 
                 Rectangle()
                     .fill(theme.ink)
@@ -271,10 +273,12 @@ struct ContentView: View {
                             .foregroundColor(theme.textPrimary)
                             .lineLimit(1)
                     }
+                    .frame(maxWidth: 112)
                     .padding(.horizontal, 8)
                     .frame(height: 30)
                     .background(theme.skyPanel)
                 }
+                .buttonStyle(.plain)
             }
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .inkBox(theme, fill: theme.paper, radius: 3, shadow: 2)
@@ -664,6 +668,7 @@ struct ContentView: View {
                                     .frame(width: 30, height: 30)
                                     .inkBox(theme, fill: theme.paper, radius: 3, shadow: 1.5)
                             }
+                            .buttonStyle(.plain)
 
                             Button {
                                 player.togglePlayPause()
@@ -682,6 +687,7 @@ struct ContentView: View {
                                 .frame(width: 34, height: 30)
                                 .inkBox(theme, fill: theme.accentSky, radius: 3, shadow: 1.5)
                             }
+                            .buttonStyle(.plain)
 
                             Button {
                                 player.nextTrack(manual: true)
@@ -692,6 +698,7 @@ struct ContentView: View {
                                     .frame(width: 30, height: 30)
                                     .inkBox(theme, fill: theme.paper, radius: 3, shadow: 1.5)
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 12)

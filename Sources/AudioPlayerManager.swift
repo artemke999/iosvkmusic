@@ -204,7 +204,13 @@ final class AudioPlayerManager: ObservableObject {
     }
 
     func togglePlayPause() {
-        guard let player else {
+        if isBuffering {
+            loadTask?.cancel()
+            isBuffering = false
+            vkClient?.statusText = "Загрузка отменена"
+            return
+        }
+        guard player != nil else {
             if !queue.isEmpty {
                 playQueueIndex(0, pushHistory: false)
             }
@@ -646,15 +652,15 @@ final class AudioPlayerManager: ObservableObject {
             return
         }
         let coverStr = track.coverUrl
-        Task.detached(priority: .utility) { [weak self] in
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = UIImage(data: data) else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.cachedArtwork = (coverStr, image)
-                if self.currentTrack?.coverUrl == coverStr {
-                    self.updateNowPlayingInfo()
-                }
+        Task { [weak self] in
+            let image: UIImage? = await Task.detached(priority: .utility) {
+                guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+                return UIImage(data: data)
+            }.value
+            guard let self, let image else { return }
+            self.cachedArtwork = (coverStr, image)
+            if self.currentTrack?.coverUrl == coverStr {
+                self.updateNowPlayingInfo()
             }
         }
     }
