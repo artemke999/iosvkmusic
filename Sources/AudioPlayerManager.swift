@@ -16,17 +16,47 @@ final class AudioPlayerManager: ObservableObject {
     @Published var isMuted: Bool = false
     @Published var crossfadeSecs: Int = 1
 
+    // Equalizer & AirPods 3 Audio Engine
+    @Published var eqEnabled: Bool = true
+    @Published var eqPreset: EQPreset = .airpodsHyperpop
+    @Published var eqBands: [Float] = EQPreset.airpodsHyperpop.defaultGains
+    @Published var preampDB: Float = 0.0
+    @Published var airpods3Mode: Bool = true
+    @Published var spatialStage: Float = 0.25
+    @Published var audioRouteName: String = "Динамик"
+    @Published var isAirPodsConnected: Bool = false
+
+    // MARK: - AVAudioEngine Graph (Primary Playback + Real-Time DSP)
+    private let engine = AVAudioEngine()
+    private let playerNodeA = AVAudioPlayerNode()
+    private let playerNodeB = AVAudioPlayerNode()
+    private let trackMixerNode = AVAudioMixerNode()
+    private let eqNode = AVAudioUnitEQ(numberOfBands: 8)
+    private let spatialNode = AVAudioUnitReverb()
+    private let graphFormat = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+
+    private var activeIsA: Bool = true
+    private var activeFile: AVAudioFile?
+    private var fadingFile: AVAudioFile?
+    private var engineBaseSeconds: Double = 0
+    private var mainEngineToken: UInt64 = 0
+    private var engineTimer: Timer?
+    private var usingEngine: Bool = false
+    private var isEngineGraphConfigured: Bool = false
+
+    // MARK: - AVPlayer Fallback (Remote Streams)
     private var player: AVPlayer?
     private var fadingPlayer: AVPlayer?
+    private var timeObserver: Any?
+    private var endObserver: NSObjectProtocol?
+
+    // Crossfade Envelope State
     private var fadingStartDate: Date?
     private var fadeInStartDate: Date?
     private var activeFadeDuration: Double = 0
     private var crossfadeTimer: Timer?
 
-    private var timeObserver: Any?
-    private var endObserver: NSObjectProtocol?
     private weak var vkClient: VKAPIClient?
-
     private var queue: [VKTrack] = []
     private var currentIndex: Int?
     private var history: [Int] = []
@@ -39,11 +69,21 @@ final class AudioPlayerManager: ObservableObject {
     private var prefetchedNext: (trackId: String, fileURL: URL, track: VKTrack)?
     private var didTriggerTransitionForCurrent: Bool = false
 
+    private var routeObserver: NSObjectProtocol?
+    private var interruptionObserver: NSObjectProtocol?
+    private var engineConfigObserver: NSObjectProtocol?
+
     private enum Keys {
         static let shuffle = "player_shuffle"
         static let repeatMode = "player_repeat"
         static let volume = "player_volume"
         static let crossfade = "player_crossfade_secs"
+        static let eqEnabled = "eq_enabled"
+        static let eqPreset = "eq_preset"
+        static let eqBands = "eq_bands"
+        static let preampDB = "eq_preamp_db"
+        static let airpods3Mode = "eq_airpods3_mode"
+        static let spatialStage = "eq_spatial_stage"
     }
 
     init() {
@@ -64,13 +104,191 @@ final class AudioPlayerManager: ObservableObject {
         } else {
             self.crossfadeSecs = 1
         }
+
+        if defaults.object(forKey: Keys.eqEnabled) != nil {
+            self.eqEnabled = defaults.bool(forKey: Keys.eqEnabled)
+        }
+        if let rawPreset = defaults.string(forKey: Keys.eqPreset),
+           let preset = EQPreset(rawValue: rawPreset) {
+            self.eqPreset = preset
+        }
+        if let savedBands = defaults.array(forKey: Keys.eqBands) as? [Double],
+           savedBands.count == 6 {
+            self.eqBands = savedBands.map { Float(max(-12, min(12, $0))) }
+        } else {
+            self.eqBands = self.eqPreset.defaultGains
+        }
+        if defaults.object(forKey: Keys.preampDB) != nil {
+            self.preampDB = max(-12, min(6, defaults.float(forKey: Keys.preampDB)))
+        }
+        if defaults.object(forKey: Keys.airpods3Mode) != nil {
+            self.airpods3Mode = defaults.bool(forKey: Keys.airpods3Mode)
+        }
+        if defaults.object(forKey: Keys.spatialStage) != nil {
+            self.spatialStage = max(0, min(1, defaults.float(forKey: Keys.spatialStage)))
+        }
+
         setupAudioSession()
+        configureEngineGraph()
+        applyEQSettings()
+        refreshAudioRoute()
+        setupObservers()
         setupRemoteCommands()
     }
 
     func configure(vkClient: VKAPIClient) {
         self.vkClient = vkClient
     }
+
+    private var activePlayerNode: AVAudioPlayerNode {
+        activeIsA ? playerNodeA : playerNodeB
+    }
+
+    private var retiringPlayerNode: AVAudioPlayerNode {
+        activeIsA ? playerNodeB : playerNodeA
+    }
+
+    // MARK: - Equalizer & AirPods 3 Controls
+
+    func setEQEnabled(_ enabled: Bool) {
+        eqEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: Keys.eqEnabled)
+        applyEQSettings()
+    }
+
+    func applyEQPreset(_ preset: EQPreset) {
+        eqPreset = preset
+        if preset != .custom {
+            eqBands = preset.defaultGains
+        }
+        eqEnabled = true
+        if preset == .airpodsHyperpop || preset == .airpodsIdeal {
+            airpods3Mode = true
+            UserDefaults.standard.set(true, forKey: Keys.airpods3Mode)
+        }
+        UserDefaults.standard.set(true, forKey: Keys.eqEnabled)
+        UserDefaults.standard.set(preset.rawValue, forKey: Keys.eqPreset)
+        UserDefaults.standard.set(eqBands.map { Double($0) }, forKey: Keys.eqBands)
+        applyEQSettings()
+    }
+
+    func setEQBandGain(index: Int, gain: Float) {
+        guard index >= 0 && index < 6 else { return }
+        let clamped = (max(-12.0, min(12.0, gain)) * 2.0).rounded() / 2.0
+        eqBands[index] = clamped
+        eqPreset = .custom
+        if !eqEnabled {
+            eqEnabled = true
+            UserDefaults.standard.set(true, forKey: Keys.eqEnabled)
+        }
+        UserDefaults.standard.set(eqPreset.rawValue, forKey: Keys.eqPreset)
+        UserDefaults.standard.set(eqBands.map { Double($0) }, forKey: Keys.eqBands)
+        applyEQSettings()
+    }
+
+    func setPreamp(_ db: Float) {
+        let clamped = (max(-12.0, min(6.0, db)) * 2.0).rounded() / 2.0
+        preampDB = clamped
+        UserDefaults.standard.set(clamped, forKey: Keys.preampDB)
+        applyEQSettings()
+    }
+
+    func setAirPods3Mode(_ enabled: Bool) {
+        airpods3Mode = enabled
+        UserDefaults.standard.set(enabled, forKey: Keys.airpods3Mode)
+        applyEQSettings()
+    }
+
+    func setSpatialStage(_ stage: Float) {
+        let clamped = max(0.0, min(1.0, stage))
+        spatialStage = clamped
+        UserDefaults.standard.set(clamped, forKey: Keys.spatialStage)
+        applyEQSettings()
+    }
+
+    func resetEQ() {
+        preampDB = 0.0
+        spatialStage = 0.25
+        UserDefaults.standard.set(0.0, forKey: Keys.preampDB)
+        UserDefaults.standard.set(0.25, forKey: Keys.spatialStage)
+        applyEQPreset(.flat)
+    }
+
+    private func configureEngineGraph() {
+        guard !isEngineGraphConfigured else { return }
+        engine.attach(playerNodeA)
+        engine.attach(playerNodeB)
+        engine.attach(trackMixerNode)
+        engine.attach(eqNode)
+        engine.attach(spatialNode)
+
+        spatialNode.loadFactoryPreset(.smallRoom)
+        spatialNode.wetDryMix = 0
+
+        engine.connect(playerNodeA, to: trackMixerNode, format: graphFormat)
+        engine.connect(playerNodeB, to: trackMixerNode, format: graphFormat)
+        engine.connect(trackMixerNode, to: eqNode, format: graphFormat)
+        engine.connect(eqNode, to: spatialNode, format: graphFormat)
+        engine.connect(spatialNode, to: engine.mainMixerNode, format: nil)
+
+        for info in EQBandInfo.sixBands {
+            let band = eqNode.bands[info.index]
+            band.frequency = info.frequencyHz
+            if info.index == 0 {
+                band.filterType = .lowShelf
+            } else if info.index == 5 {
+                band.filterType = .highShelf
+            } else {
+                band.filterType = .parametric
+                band.bandwidth = 1.0
+            }
+            band.bypass = false
+        }
+
+        // Band 6: AirPods 3 Open-Fit Sub-Bass Restore (55 Hz Low Shelf)
+        let subAirPodsBand = eqNode.bands[6]
+        subAirPodsBand.filterType = .lowShelf
+        subAirPodsBand.frequency = 55
+        subAirPodsBand.bypass = false
+
+        // Band 7: AirPods 3 Upper-Bass Boxiness Tame (230 Hz Parametric)
+        let mudAirPodsBand = eqNode.bands[7]
+        mudAirPodsBand.filterType = .parametric
+        mudAirPodsBand.frequency = 230
+        mudAirPodsBand.bandwidth = 1.1
+        mudAirPodsBand.bypass = false
+
+        isEngineGraphConfigured = true
+    }
+
+    private func applyEQSettings() {
+        for idx in 0..<6 {
+            let band = eqNode.bands[idx]
+            let g = eqEnabled ? eqBands[idx] : 0.0
+            band.gain = max(-12.0, min(12.0, g))
+            band.bypass = !eqEnabled
+        }
+
+        let applyAirPods = eqEnabled && airpods3Mode
+        eqNode.bands[6].gain = applyAirPods ? 3.2 : 0.0
+        eqNode.bands[6].bypass = !applyAirPods
+
+        eqNode.bands[7].gain = applyAirPods ? -1.5 : 0.0
+        eqNode.bands[7].bypass = !applyAirPods
+
+        // Anti-clipping headroom protection so bass boosts stay clean on AirPods 3
+        let maxUserBoost = eqBands.max() ?? 0.0
+        let airpodsBoost: Float = applyAirPods ? 2.0 : 0.0
+        let peakBoost = max(0.0, maxUserBoost + airpodsBoost * 0.5)
+        let headroom = max(0.0, peakBoost * 0.32)
+        eqNode.globalGain = eqEnabled ? max(-12.0, min(6.0, preampDB - headroom)) : 0.0
+
+        spatialNode.wetDryMix = (eqEnabled || airpods3Mode)
+            ? min(18.0, max(0.0, spatialStage) * 18.0)
+            : 0.0
+    }
+
+    // MARK: - Volume & Crossfade
 
     var effectiveVolume: Float {
         if isMuted || volume <= 0.0001 {
@@ -99,16 +317,23 @@ final class AudioPlayerManager: ObservableObject {
         applyCurrentVolume()
     }
 
-    func cycleCrossfade() {
-        switch crossfadeSecs {
-        case 0: crossfadeSecs = 1
-        case 1: crossfadeSecs = 2
-        case 2: crossfadeSecs = 3
-        case 3: crossfadeSecs = 5
-        default: crossfadeSecs = 0
-        }
-        UserDefaults.standard.set(crossfadeSecs, forKey: Keys.crossfade)
+    func setCrossfadeSecs(_ secs: Int) {
+        let valid = [0, 1, 2, 3, 5].contains(secs) ? secs : 1
+        crossfadeSecs = valid
+        UserDefaults.standard.set(valid, forKey: Keys.crossfade)
         prepareNextTrack()
+    }
+
+    func cycleCrossfade() {
+        let next: Int
+        switch crossfadeSecs {
+        case 0: next = 1
+        case 1: next = 2
+        case 2: next = 3
+        case 3: next = 5
+        default: next = 0
+        }
+        setCrossfadeSecs(next)
     }
 
     private func currentFadeInFactor() -> Float {
@@ -118,16 +343,97 @@ final class AudioPlayerManager: ObservableObject {
     }
 
     private func applyCurrentVolume() {
-        player?.volume = effectiveVolume * currentFadeInFactor()
-        if isMuted {
-            fadingPlayer?.volume = 0
+        let target = effectiveVolume * currentFadeInFactor()
+        if usingEngine {
+            activePlayerNode.volume = target
+            if isMuted {
+                retiringPlayerNode.volume = 0
+            }
+        } else {
+            player?.volume = target
+            if isMuted {
+                fadingPlayer?.volume = 0
+            }
         }
     }
+
+    // MARK: - Session, Routes & Remote Commands
 
     private func setupAudioSession() {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default)
         try? session.setActive(true)
+    }
+
+    private func refreshAudioRoute() {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        if let first = outputs.first {
+            let name = first.portName.trimmingCharacters(in: .whitespacesAndNewlines)
+            audioRouteName = name.isEmpty ? "Динамик" : name
+            let low = name.lowercased()
+            isAirPodsConnected = low.contains("airpods")
+                || first.portType == .bluetoothA2DP
+                || first.portType == .bluetoothLE
+                || first.portType == .bluetoothHFP
+        } else {
+            audioRouteName = "Динамик"
+            isAirPodsConnected = false
+        }
+    }
+
+    private func setupObservers() {
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAudioRoute()
+            }
+        }
+
+        engineConfigObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshAudioRoute()
+                if self.usingEngine && self.isPlaying {
+                    try? self.ensureEngineStarted()
+                    self.activePlayerNode.play()
+                }
+            }
+        }
+
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let info = note.userInfo,
+                  let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+            let optRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: optRaw)
+
+            Task { @MainActor in
+                guard let self else { return }
+                switch type {
+                case .began:
+                    if self.isPlaying {
+                        self.pause()
+                    }
+                case .ended:
+                    if options.contains(.shouldResume) {
+                        self.resume()
+                    }
+                @unknown default:
+                    break
+                }
+            }
+        }
     }
 
     private func setupRemoteCommands() {
@@ -170,6 +476,8 @@ final class AudioPlayerManager: ObservableObject {
         }
     }
 
+    // MARK: - Queue & Playback Control
+
     func playFromList(_ list: [VKTrack], index: Int) {
         guard index >= 0 && index < list.count else { return }
         if let current = currentTrack, current.fullId == list[index].fullId {
@@ -210,7 +518,13 @@ final class AudioPlayerManager: ObservableObject {
             vkClient?.statusText = "Загрузка отменена"
             return
         }
-        guard player != nil else {
+        if !usingEngine && player == nil {
+            if !queue.isEmpty {
+                playQueueIndex(0, pushHistory: false)
+            }
+            return
+        }
+        if usingEngine && activeFile == nil {
             if !queue.isEmpty {
                 playQueueIndex(0, pushHistory: false)
             }
@@ -227,27 +541,64 @@ final class AudioPlayerManager: ObservableObject {
     }
 
     func pause() {
-        player?.pause()
-        fadingPlayer?.pause()
+        if usingEngine {
+            activePlayerNode.pause()
+            retiringPlayerNode.pause()
+        } else {
+            player?.pause()
+            fadingPlayer?.pause()
+        }
         isPlaying = false
         updateNowPlayingInfo()
     }
 
     func resume() {
         try? AVAudioSession.sharedInstance().setActive(true)
-        player?.play()
-        fadingPlayer?.play()
+        if usingEngine {
+            try? ensureEngineStarted()
+            activePlayerNode.play()
+            if fadingStartDate != nil {
+                retiringPlayerNode.play()
+            }
+        } else {
+            player?.play()
+            fadingPlayer?.play()
+        }
         isPlaying = true
         updateNowPlayingInfo()
     }
 
     func seek(to seconds: Double) {
-        let clamped = max(0, min(duration > 0 ? duration : seconds, seconds))
-        let cmTime = CMTime(seconds: clamped, preferredTimescale: 600)
-        player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-            Task { @MainActor in
-                self?.currentTime = clamped
-                self?.updateNowPlayingInfo()
+        let maxDur = duration > 0 ? duration : seconds
+        let clamped = max(0, min(maxDur, seconds))
+
+        if usingEngine, let file = activeFile {
+            let sr = file.processingFormat.sampleRate
+            guard sr > 0 && file.length > 0 else { return }
+
+            mainEngineToken &+= 1
+            let node = activePlayerNode
+            node.stop()
+
+            let targetFrame = min(file.length - 1, max(0, AVAudioFramePosition(clamped * sr)))
+            let remaining = AVAudioFrameCount(max(1, file.length - targetFrame))
+            engineBaseSeconds = Double(targetFrame) / sr
+            currentTime = engineBaseSeconds
+            didTriggerTransitionForCurrent = false
+
+            scheduleSegment(node: node, file: file, startFrame: targetFrame, frameCount: remaining, token: mainEngineToken)
+            if isPlaying {
+                try? ensureEngineStarted()
+                node.play()
+            }
+            updateNowPlayingInfo()
+        } else {
+            let cmTime = CMTime(seconds: clamped, preferredTimescale: 600)
+            player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                Task { @MainActor in
+                    self?.currentTime = clamped
+                    self?.updateNowPlayingInfo()
+                }
             }
         }
     }
@@ -341,9 +692,7 @@ final class AudioPlayerManager: ObservableObject {
         loadTask?.cancel()
         prefetchTask?.cancel()
         stopCrossfadeImmediate()
-        cleanupObservers()
-        player?.pause()
-        player = nil
+        stopAllPlaybackNodes()
 
         let track = queue[index]
         self.currentIndex = index
@@ -422,8 +771,182 @@ final class AudioPlayerManager: ObservableObject {
         }
     }
 
+    // MARK: - Unified Engine / AVPlayer Playback Startup
+
+    private func ensureEngineStarted() throws {
+        configureEngineGraph()
+        if !engine.isRunning {
+            engine.prepare()
+            try engine.start()
+        }
+    }
+
+    private func stopAllPlaybackNodes() {
+        mainEngineToken &+= 1
+        engineTimer?.invalidate()
+        engineTimer = nil
+        playerNodeA.stop()
+        playerNodeB.stop()
+        activeFile = nil
+        fadingFile = nil
+
+        cleanupAVPlayerObservers()
+        player?.pause()
+        player = nil
+        fadingPlayer?.pause()
+        fadingPlayer = nil
+    }
+
     private func startPlayback(fileOrStreamURL: URL, track: VKTrack, crossfadeInDuration: Double) {
-        cleanupObservers()
+        if fileOrStreamURL.isFileURL,
+           let audioFile = try? AVAudioFile(forReading: fileOrStreamURL),
+           audioFile.length > 0,
+           audioFile.processingFormat.sampleRate > 0 {
+            do {
+                try startEnginePlayback(file: audioFile, track: track, crossfadeInDuration: crossfadeInDuration)
+                return
+            } catch {
+                // Fall through to AVPlayer fallback if AVAudioEngine setup fails on device
+            }
+        }
+        startAVPlayerFallback(url: fileOrStreamURL, track: track, crossfadeInDuration: crossfadeInDuration)
+    }
+
+    private func startEnginePlayback(file: AVAudioFile, track: VKTrack, crossfadeInDuration: Double) throws {
+        cleanupAVPlayerObservers()
+        player?.pause()
+        player = nil
+        fadingPlayer?.pause()
+        fadingPlayer = nil
+
+        if crossfadeInDuration <= 0 {
+            stopCrossfadeImmediate()
+            playerNodeA.stop()
+            playerNodeB.stop()
+            fadingFile = nil
+        }
+
+        usingEngine = true
+        configureEngineGraph()
+
+        let node = activePlayerNode
+        mainEngineToken &+= 1
+        let token = mainEngineToken
+        node.stop()
+
+        let currentOutFmt = node.outputFormat(forBus: 0)
+        let targetFmt = file.processingFormat
+        if currentOutFmt.sampleRate != targetFmt.sampleRate || currentOutFmt.channelCount != targetFmt.channelCount {
+            let resumeRetiring = (crossfadeInDuration > 0 && fadingFile != nil && retiringPlayerNode.isPlaying)
+            if resumeRetiring {
+                retiringPlayerNode.pause()
+            }
+            if engine.isRunning {
+                engine.stop()
+            }
+            engine.disconnectNodeOutput(node)
+            engine.connect(node, to: trackMixerNode, format: targetFmt)
+            try ensureEngineStarted()
+            if resumeRetiring {
+                retiringPlayerNode.play()
+            }
+        } else {
+            try ensureEngineStarted()
+        }
+
+        activeFile = file
+        engineBaseSeconds = 0
+        currentTime = 0
+        didTriggerTransitionForCurrent = false
+
+        let fileDuration = Double(file.length) / file.processingFormat.sampleRate
+        duration = fileDuration > 0 ? fileDuration : Double(max(0, track.duration))
+
+        if crossfadeInDuration > 0 {
+            node.volume = 0
+            fadeInStartDate = Date()
+            activeFadeDuration = crossfadeInDuration
+            startCrossfadeTimerIfNeeded()
+        } else {
+            node.volume = effectiveVolume
+        }
+
+        let totalFrames = AVAudioFrameCount(file.length)
+        scheduleSegment(node: node, file: file, startFrame: 0, frameCount: totalFrames, token: token)
+        node.play()
+
+        startEngineTimer()
+        isPlaying = true
+        let offlinePrefix = LocalStorage.findDownloadedFile(for: track) != nil ? "Оффлайн: " : ""
+        vkClient?.statusText = "\(offlinePrefix)\(track.artist) — \(track.title)"
+        updateNowPlayingInfo()
+    }
+
+    private func scheduleSegment(
+        node: AVAudioPlayerNode,
+        file: AVAudioFile,
+        startFrame: AVAudioFramePosition,
+        frameCount: AVAudioFrameCount,
+        token: UInt64
+    ) {
+        node.scheduleSegment(
+            file,
+            startingFrame: startFrame,
+            frameCount: frameCount,
+            at: nil,
+            completionCallbackType: .dataPlayedBack
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self,
+                      self.usingEngine,
+                      self.mainEngineToken == token,
+                      self.activePlayerNode === node,
+                      self.isPlaying,
+                      !self.didTriggerTransitionForCurrent else {
+                    return
+                }
+                self.nextTrack(manual: false)
+            }
+        }
+    }
+
+    private func startEngineTimer() {
+        engineTimer?.invalidate()
+        engineTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateEngineProgress()
+            }
+        }
+    }
+
+    private func updateEngineProgress() {
+        guard usingEngine, isPlaying else { return }
+        let node = activePlayerNode
+        guard node.isPlaying,
+              let nodeTime = node.lastRenderTime,
+              nodeTime.isSampleTimeValid,
+              let playerTime = node.playerTime(forNodeTime: nodeTime),
+              playerTime.sampleTime >= 0,
+              playerTime.sampleRate > 0 else {
+            return
+        }
+        let secs = engineBaseSeconds + Double(playerTime.sampleTime) / playerTime.sampleRate
+        if secs.isFinite {
+            currentTime = duration > 0 ? min(duration, max(0, secs)) : max(0, secs)
+        }
+        checkCrossfadeTrigger()
+    }
+
+    private func startAVPlayerFallback(url: URL, track: VKTrack, crossfadeInDuration: Double) {
+        engineTimer?.invalidate()
+        engineTimer = nil
+        playerNodeA.stop()
+        playerNodeB.stop()
+        activeFile = nil
+        fadingFile = nil
+        usingEngine = false
+
+        cleanupAVPlayerObservers()
         if crossfadeInDuration <= 0 {
             stopCrossfadeImmediate()
             player?.pause()
@@ -432,10 +955,10 @@ final class AudioPlayerManager: ObservableObject {
 
         try? AVAudioSession.sharedInstance().setActive(true)
         let asset: AVURLAsset
-        if fileOrStreamURL.isFileURL {
-            asset = AVURLAsset(url: fileOrStreamURL)
+        if url.isFileURL {
+            asset = AVURLAsset(url: url)
         } else {
-            asset = AVURLAsset(url: fileOrStreamURL, options: [
+            asset = AVURLAsset(url: url, options: [
                 "AVURLAssetHTTPHeaderFieldsKey": [
                     "User-Agent": VKAPIClient.desktopUserAgent
                 ]
@@ -494,6 +1017,8 @@ final class AudioPlayerManager: ObservableObject {
         vkClient?.statusText = "\(offlinePrefix)\(track.artist) — \(track.title)"
         updateNowPlayingInfo()
     }
+
+    // MARK: - Prefetch & Crossfade
 
     private func prepareNextTrack() {
         prefetchTask?.cancel()
@@ -558,11 +1083,19 @@ final class AudioPlayerManager: ObservableObject {
         prefetched: (trackId: String, fileURL: URL, track: VKTrack)
     ) {
         didTriggerTransitionForCurrent = true
-        cleanupObservers()
-        fadingPlayer?.pause()
-        fadingPlayer = player
-        fadingStartDate = Date()
-        player = nil
+
+        if usingEngine {
+            mainEngineToken &+= 1
+            fadingFile = activeFile
+            activeIsA.toggle()
+            fadingStartDate = Date()
+        } else {
+            cleanupAVPlayerObservers()
+            fadingPlayer?.pause()
+            fadingPlayer = player
+            fadingStartDate = Date()
+            player = nil
+        }
 
         if let prev = currentIndex, prev != nextIdx {
             history.append(prev)
@@ -598,35 +1131,65 @@ final class AudioPlayerManager: ObservableObject {
         let baseGain = effectiveVolume
         let dur = max(0.1, activeFadeDuration)
 
-        if let fading = fadingPlayer, let fStart = fadingStartDate {
-            let t = min(1.0, max(0.0, Date().timeIntervalSince(fStart) / dur))
-            if t >= 1.0 {
-                fading.pause()
-                fadingPlayer = nil
-                fadingStartDate = nil
-            } else {
-                fading.volume = isMuted ? 0 : Float(1.0 - t) * baseGain
+        if usingEngine {
+            if fadingFile != nil, let fStart = fadingStartDate {
+                let t = min(1.0, max(0.0, Date().timeIntervalSince(fStart) / dur))
+                let fadingNode = retiringPlayerNode
+                if t >= 1.0 {
+                    fadingNode.stop()
+                    fadingFile = nil
+                    fadingStartDate = nil
+                } else {
+                    fadingNode.volume = isMuted ? 0 : Float(1.0 - t) * baseGain
+                }
             }
-        }
 
-        if let inStart = fadeInStartDate {
-            let t = min(1.0, max(0.0, Date().timeIntervalSince(inStart) / dur))
-            player?.volume = Float(t) * baseGain
-            if t >= 1.0 {
-                fadeInStartDate = nil
-                player?.volume = baseGain
+            if let inStart = fadeInStartDate {
+                let t = min(1.0, max(0.0, Date().timeIntervalSince(inStart) / dur))
+                activePlayerNode.volume = Float(t) * baseGain
+                if t >= 1.0 {
+                    fadeInStartDate = nil
+                    activePlayerNode.volume = baseGain
+                }
             }
-        }
 
-        if fadingPlayer == nil && fadeInStartDate == nil {
-            crossfadeTimer?.invalidate()
-            crossfadeTimer = nil
+            if fadingFile == nil && fadeInStartDate == nil {
+                crossfadeTimer?.invalidate()
+                crossfadeTimer = nil
+            }
+        } else {
+            if let fading = fadingPlayer, let fStart = fadingStartDate {
+                let t = min(1.0, max(0.0, Date().timeIntervalSince(fStart) / dur))
+                if t >= 1.0 {
+                    fading.pause()
+                    fadingPlayer = nil
+                    fadingStartDate = nil
+                } else {
+                    fading.volume = isMuted ? 0 : Float(1.0 - t) * baseGain
+                }
+            }
+
+            if let inStart = fadeInStartDate {
+                let t = min(1.0, max(0.0, Date().timeIntervalSince(inStart) / dur))
+                player?.volume = Float(t) * baseGain
+                if t >= 1.0 {
+                    fadeInStartDate = nil
+                    player?.volume = baseGain
+                }
+            }
+
+            if fadingPlayer == nil && fadeInStartDate == nil {
+                crossfadeTimer?.invalidate()
+                crossfadeTimer = nil
+            }
         }
     }
 
     private func stopCrossfadeImmediate() {
         crossfadeTimer?.invalidate()
         crossfadeTimer = nil
+        retiringPlayerNode.stop()
+        fadingFile = nil
         fadingPlayer?.pause()
         fadingPlayer = nil
         fadingStartDate = nil
@@ -634,7 +1197,7 @@ final class AudioPlayerManager: ObservableObject {
         activeFadeDuration = 0
     }
 
-    private func cleanupObservers() {
+    private func cleanupAVPlayerObservers() {
         if let obs = timeObserver, let player {
             player.removeTimeObserver(obs)
         }
@@ -644,6 +1207,8 @@ final class AudioPlayerManager: ObservableObject {
         }
         endObserver = nil
     }
+
+    // MARK: - Artwork & Lock Screen Metadata
 
     private func fetchArtworkIfNeeded(for track: VKTrack) {
         guard !track.coverUrl.isEmpty, let url = URL(string: track.coverUrl) else { return }

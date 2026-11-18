@@ -6,6 +6,80 @@ enum RepeatMode: String, Codable, CaseIterable {
     case one
 }
 
+struct EQBandInfo: Identifiable {
+    let index: Int
+    let frequencyHz: Float
+    let shortLabel: String
+    let roleLabel: String
+
+    var id: Int { index }
+
+    static let sixBands: [EQBandInfo] = [
+        EQBandInfo(index: 0, frequencyHz: 60, shortLabel: "60 Гц", roleLabel: "Саб / 808"),
+        EQBandInfo(index: 1, frequencyHz: 150, shortLabel: "150 Гц", roleLabel: "Панч"),
+        EQBandInfo(index: 2, frequencyHz: 400, shortLabel: "400 Гц", roleLabel: "Тепло / муть"),
+        EQBandInfo(index: 3, frequencyHz: 1000, shortLabel: "1 кГц", roleLabel: "Вокал"),
+        EQBandInfo(index: 4, frequencyHz: 3200, shortLabel: "3.2 кГц", roleLabel: "Атака / снейр"),
+        EQBandInfo(index: 5, frequencyHz: 10000, shortLabel: "10 кГц", roleLabel: "Воздух / глитч")
+    ]
+}
+
+enum EQPreset: String, CaseIterable, Codable, Identifiable {
+    case airpodsHyperpop
+    case sqworeHyperpop
+    case antipopGlitch
+    case airpodsIdeal
+    case bass808
+    case dream17Night
+    case flat
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .airpodsHyperpop: return "AirPods 3 × Hyperpop"
+        case .sqworeHyperpop: return "Sqwore Hyperpop"
+        case .antipopGlitch: return "Antipop / Glitch"
+        case .airpodsIdeal: return "AirPods 3 · Ориг"
+        case .bass808: return "808 Bass Boost"
+        case .dream17Night: return "Dream 17 Night"
+        case .flat: return "Flat (0 dB)"
+        case .custom: return "Свой"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .airpodsHyperpop: return "+саб и яркие синты специально под вкладыши AirPods 3"
+        case .sqworeHyperpop: return "Плотнее 808, чистая середина и воздушные верха"
+        case .antipopGlitch: return "Хрустящая атака, поджатый 400 Гц, резкий верх"
+        case .airpodsIdeal: return "Выравнивает открытую посадку AirPods 3 (оригинал)"
+        case .bass808: return "Максимальный упор на низ и саб-бас без каши"
+        case .dream17Night: return "Мягкий ночной баланс, без режущей середины"
+        case .flat: return "Нулевая кривая без окраса (0 дБ)"
+        case .custom: return "Ручная настройка полос"
+        }
+    }
+
+    var defaultGains: [Float] {
+        switch self {
+        case .airpodsHyperpop: return [6.0, 2.0, -2.0, 1.0, 2.5, 4.5]
+        case .sqworeHyperpop: return [5.5, 2.5, -2.0, 0.5, 3.0, 4.5]
+        case .antipopGlitch: return [4.5, 1.0, -2.5, 1.5, 3.5, 3.5]
+        case .airpodsIdeal: return [4.0, 1.0, -1.5, 0.5, 1.5, 3.0]
+        case .bass808: return [7.5, 4.0, -1.5, 0.0, 1.0, 2.0]
+        case .dream17Night: return [3.5, 2.0, 0.0, -1.0, 1.0, 3.5]
+        case .flat: return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        case .custom: return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        }
+    }
+
+    static var selectablePresets: [EQPreset] {
+        [.airpodsHyperpop, .sqworeHyperpop, .antipopGlitch, .airpodsIdeal, .bass808, .dream17Night, .flat]
+    }
+}
+
 struct VKTrack: Identifiable, Hashable, Codable {
     let id: Int64
     let ownerId: Int64
