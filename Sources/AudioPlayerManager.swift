@@ -7,12 +7,22 @@ import UIKit
 final class AudioPlayerManager: ObservableObject {
     @Published var currentTrack: VKTrack?
     @Published var isPlaying: Bool = false
+    @Published var isBuffering: Bool = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     @Published var shuffle: Bool = false
     @Published var repeatMode: RepeatMode = .none
+    @Published var volume: Float = 1.0
+    @Published var isMuted: Bool = false
+    @Published var crossfadeSecs: Int = 1
 
     private var player: AVPlayer?
+    private var fadingPlayer: AVPlayer?
+    private var fadingStartDate: Date?
+    private var fadeInStartDate: Date?
+    private var activeFadeDuration: Double = 0
+    private var crossfadeTimer: Timer?
+
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private weak var vkClient: VKAPIClient?
@@ -22,12 +32,37 @@ final class AudioPlayerManager: ObservableObject {
     private var history: [Int] = []
     private var cachedArtwork: (String, UIImage)?
 
+    private var loadTask: Task<Void, Never>?
+    private var prefetchTask: Task<Void, Never>?
+    private var loadGeneration: UInt64 = 0
+    private var plannedNextIndex: Int?
+    private var prefetchedNext: (trackId: String, fileURL: URL, track: VKTrack)?
+    private var didTriggerTransitionForCurrent: Bool = false
+
+    private enum Keys {
+        static let shuffle = "player_shuffle"
+        static let repeatMode = "player_repeat"
+        static let volume = "player_volume"
+        static let crossfade = "player_crossfade_secs"
+    }
+
     init() {
         let defaults = UserDefaults.standard
-        self.shuffle = defaults.bool(forKey: "player_shuffle")
-        if let rawRep = defaults.string(forKey: "player_repeat"),
+        self.shuffle = defaults.bool(forKey: Keys.shuffle)
+        if let rawRep = defaults.string(forKey: Keys.repeatMode),
            let mode = RepeatMode(rawValue: rawRep) {
             self.repeatMode = mode
+        }
+        if defaults.object(forKey: Keys.volume) != nil {
+            self.volume = max(0, min(1, defaults.float(forKey: Keys.volume)))
+        } else {
+            self.volume = 1.0
+        }
+        if defaults.object(forKey: Keys.crossfade) != nil {
+            let savedCf = defaults.integer(forKey: Keys.crossfade)
+            self.crossfadeSecs = [0, 1, 2, 3, 5].contains(savedCf) ? savedCf : 1
+        } else {
+            self.crossfadeSecs = 1
         }
         setupAudioSession()
         setupRemoteCommands()
@@ -35,6 +70,58 @@ final class AudioPlayerManager: ObservableObject {
 
     func configure(vkClient: VKAPIClient) {
         self.vkClient = vkClient
+    }
+
+    var effectiveVolume: Float {
+        if isMuted || volume <= 0.0001 {
+            return 0
+        }
+        let clamped = max(0, min(1, volume))
+        return clamped * clamped * clamped
+    }
+
+    func setVolume(_ newVolume: Float) {
+        let clamped = max(0, min(1, newVolume))
+        volume = clamped
+        if clamped > 0 && isMuted {
+            isMuted = false
+        }
+        UserDefaults.standard.set(clamped, forKey: Keys.volume)
+        applyCurrentVolume()
+    }
+
+    func adjustVolume(by delta: Float) {
+        setVolume(volume + delta)
+    }
+
+    func toggleMute() {
+        isMuted.toggle()
+        applyCurrentVolume()
+    }
+
+    func cycleCrossfade() {
+        switch crossfadeSecs {
+        case 0: crossfadeSecs = 1
+        case 1: crossfadeSecs = 2
+        case 2: crossfadeSecs = 3
+        case 3: crossfadeSecs = 5
+        default: crossfadeSecs = 0
+        }
+        UserDefaults.standard.set(crossfadeSecs, forKey: Keys.crossfade)
+        prepareNextTrack()
+    }
+
+    private func currentFadeInFactor() -> Float {
+        guard let start = fadeInStartDate, activeFadeDuration > 0 else { return 1.0 }
+        let elapsed = Date().timeIntervalSince(start)
+        return Float(max(0.0, min(1.0, elapsed / activeFadeDuration)))
+    }
+
+    private func applyCurrentVolume() {
+        player?.volume = effectiveVolume * currentFadeInFactor()
+        if isMuted {
+            fadingPlayer?.volume = 0
+        }
     }
 
     private func setupAudioSession() {
@@ -91,12 +178,17 @@ final class AudioPlayerManager: ObservableObject {
         }
         self.queue = list
         self.history.removeAll()
+        self.plannedNextIndex = nil
+        self.prefetchedNext = nil
         playQueueIndex(index, pushHistory: false)
     }
 
     func toggleShuffle() {
         shuffle.toggle()
-        UserDefaults.standard.set(shuffle, forKey: "player_shuffle")
+        UserDefaults.standard.set(shuffle, forKey: Keys.shuffle)
+        plannedNextIndex = nil
+        prefetchedNext = nil
+        prepareNextTrack()
     }
 
     func cycleRepeatMode() {
@@ -105,7 +197,10 @@ final class AudioPlayerManager: ObservableObject {
         case .all: repeatMode = .one
         case .one: repeatMode = .none
         }
-        UserDefaults.standard.set(repeatMode.rawValue, forKey: "player_repeat")
+        UserDefaults.standard.set(repeatMode.rawValue, forKey: Keys.repeatMode)
+        plannedNextIndex = nil
+        prefetchedNext = nil
+        prepareNextTrack()
     }
 
     func togglePlayPause() {
@@ -118,12 +213,16 @@ final class AudioPlayerManager: ObservableObject {
         if isPlaying {
             pause()
         } else {
+            if duration > 0 && currentTime >= max(0, duration - 0.35) {
+                seek(to: 0)
+            }
             resume()
         }
     }
 
     func pause() {
         player?.pause()
+        fadingPlayer?.pause()
         isPlaying = false
         updateNowPlayingInfo()
     }
@@ -131,6 +230,7 @@ final class AudioPlayerManager: ObservableObject {
     func resume() {
         try? AVAudioSession.sharedInstance().setActive(true)
         player?.play()
+        fadingPlayer?.play()
         isPlaying = true
         updateNowPlayingInfo()
     }
@@ -138,7 +238,7 @@ final class AudioPlayerManager: ObservableObject {
     func seek(to seconds: Double) {
         let clamped = max(0, min(duration > 0 ? duration : seconds, seconds))
         let cmTime = CMTime(seconds: clamped, preferredTimescale: 600)
-        player?.seek(to: cmTime) { [weak self] _ in
+        player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
             Task { @MainActor in
                 self?.currentTime = clamped
                 self?.updateNowPlayingInfo()
@@ -146,13 +246,18 @@ final class AudioPlayerManager: ObservableObject {
         }
     }
 
-    func nextTrack(manual: Bool = true) {
-        guard !queue.isEmpty else { return }
-        if repeatMode == .one && !manual, let idx = currentIndex {
-            playQueueIndex(idx, pushHistory: false)
-            return
+    private func computeNextIndex() -> Int? {
+        guard !queue.isEmpty else { return nil }
+        if repeatMode == .one {
+            return currentIndex
         }
         if shuffle {
+            if let planned = plannedNextIndex,
+               planned >= 0,
+               planned < queue.count,
+               (queue.count == 1 || planned != currentIndex) {
+                return planned
+            }
             let nextIdx: Int
             if queue.count == 1 {
                 nextIdx = 0
@@ -163,6 +268,28 @@ final class AudioPlayerManager: ObservableObject {
                 }
                 nextIdx = candidate
             }
+            plannedNextIndex = nextIdx
+            return nextIdx
+        }
+        let cur = currentIndex ?? 0
+        let nxt = cur + 1
+        if nxt < queue.count {
+            return nxt
+        } else if repeatMode == .all {
+            return 0
+        } else {
+            return nil
+        }
+    }
+
+    func nextTrack(manual: Bool = true) {
+        guard !queue.isEmpty else { return }
+        if repeatMode == .one && !manual, let idx = currentIndex {
+            playQueueIndex(idx, pushHistory: false)
+            return
+        }
+        if shuffle {
+            let nextIdx = computeNextIndex() ?? 0
             playQueueIndex(nextIdx, pushHistory: true)
             return
         }
@@ -205,40 +332,128 @@ final class AudioPlayerManager: ObservableObject {
             }
         }
 
+        loadTask?.cancel()
+        prefetchTask?.cancel()
+        stopCrossfadeImmediate()
         cleanupObservers()
+        player?.pause()
+        player = nil
 
         let track = queue[index]
         self.currentIndex = index
         self.currentTrack = track
+        self.plannedNextIndex = nil
+        self.didTriggerTransitionForCurrent = false
         self.currentTime = 0
         self.duration = Double(max(0, track.duration))
+        self.loadGeneration &+= 1
+        let gen = self.loadGeneration
 
-        let playbackURL: URL?
-        if let localURL = LocalStorage.findDownloadedFile(for: track) {
-            playbackURL = localURL
-        } else if track.url.hasPrefix("file://") {
-            playbackURL = URL(string: track.url)
-        } else {
-            playbackURL = URL(string: track.url)
-        }
+        vkClient?.recordPlayedTrack(track)
+        fetchArtworkIfNeeded(for: track)
 
-        guard let url = playbackURL else {
-            vkClient?.statusText = "Нет ссылки для трека: \(track.title)"
+        if let pref = prefetchedNext,
+           pref.trackId == track.fullId,
+           FileManager.default.fileExists(atPath: pref.fileURL.path) {
+            self.prefetchedNext = nil
+            self.isBuffering = false
+            startPlayback(fileOrStreamURL: pref.fileURL, track: pref.track, crossfadeInDuration: 0)
+            prepareNextTrack()
             return
         }
 
+        if let localURL = LocalStorage.findDownloadedFile(for: track)
+            ?? LocalStorage.findCachedAudioFile(for: track) {
+            self.isBuffering = false
+            startPlayback(fileOrStreamURL: localURL, track: track, crossfadeInDuration: 0)
+            prepareNextTrack()
+            return
+        }
+
+        if track.url.hasPrefix("file://"), let fileURL = URL(string: track.url) {
+            self.isBuffering = false
+            startPlayback(fileOrStreamURL: fileURL, track: track, crossfadeInDuration: 0)
+            prepareNextTrack()
+            return
+        }
+
+        self.isBuffering = true
+        self.isPlaying = false
+        vkClient?.statusText = "Буферизация: \(track.artist) — \(track.title)"
+
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let vk = self.vkClient else { return }
+                let (resolvedURL, freshTrack) = try await vk.resolvePlayableFileURL(for: track)
+                guard !Task.isCancelled, self.loadGeneration == gen else { return }
+                let activeTrack = freshTrack ?? track
+                if let freshTrack {
+                    self.updateTrackMetadata(freshTrack)
+                }
+                self.isBuffering = false
+                self.startPlayback(fileOrStreamURL: resolvedURL, track: activeTrack, crossfadeInDuration: 0)
+                self.prepareNextTrack()
+            } catch {
+                guard !Task.isCancelled, self.loadGeneration == gen else { return }
+                self.isBuffering = false
+                if let fallbackURL = URL(string: track.url), !track.url.isEmpty {
+                    self.startPlayback(fileOrStreamURL: fallbackURL, track: track, crossfadeInDuration: 0)
+                    self.prepareNextTrack()
+                } else {
+                    self.vkClient?.statusText = "Ошибка: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func updateTrackMetadata(_ fresh: VKTrack) {
+        if currentTrack?.fullId == fresh.fullId {
+            currentTrack = fresh
+        }
+        if let idx = queue.firstIndex(where: { $0.fullId == fresh.fullId }) {
+            queue[idx] = fresh
+        }
+    }
+
+    private func startPlayback(fileOrStreamURL: URL, track: VKTrack, crossfadeInDuration: Double) {
+        cleanupObservers()
+        if crossfadeInDuration <= 0 {
+            stopCrossfadeImmediate()
+            player?.pause()
+            player = nil
+        }
+
         try? AVAudioSession.sharedInstance().setActive(true)
-        let asset = AVURLAsset(url: url, options: [
-            "AVURLAssetHTTPHeaderFieldsKey": [
-                "User-Agent": VKAPIClient.desktopUserAgent
-            ]
-        ])
+        let asset: AVURLAsset
+        if fileOrStreamURL.isFileURL {
+            asset = AVURLAsset(url: fileOrStreamURL)
+        } else {
+            asset = AVURLAsset(url: fileOrStreamURL, options: [
+                "AVURLAssetHTTPHeaderFieldsKey": [
+                    "User-Agent": VKAPIClient.desktopUserAgent
+                ]
+            ])
+        }
+
         let item = AVPlayerItem(asset: asset)
         let newPlayer = AVPlayer(playerItem: item)
         self.player = newPlayer
+        self.currentTime = 0
+        self.duration = Double(max(0, track.duration))
+        self.didTriggerTransitionForCurrent = false
+
+        if crossfadeInDuration > 0 {
+            newPlayer.volume = 0
+            fadeInStartDate = Date()
+            activeFadeDuration = crossfadeInDuration
+            startCrossfadeTimerIfNeeded()
+        } else {
+            newPlayer.volume = effectiveVolume
+        }
 
         timeObserver = newPlayer.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
             Task { @MainActor in
@@ -247,11 +462,13 @@ final class AudioPlayerManager: ObservableObject {
                 if secs.isFinite {
                     self.currentTime = max(0, secs)
                 }
-                if let itemDur = self.player?.currentItem?.duration.seconds,
+                if self.duration <= 0,
+                   let itemDur = self.player?.currentItem?.duration.seconds,
                    itemDur.isFinite,
                    itemDur > 0 {
                     self.duration = itemDur
                 }
+                self.checkCrossfadeTrigger()
             }
         }
 
@@ -267,9 +484,148 @@ final class AudioPlayerManager: ObservableObject {
 
         newPlayer.play()
         self.isPlaying = true
-        vkClient?.statusText = "\(track.artist) — \(track.title)"
+        let offlinePrefix = LocalStorage.findDownloadedFile(for: track) != nil ? "Оффлайн: " : ""
+        vkClient?.statusText = "\(offlinePrefix)\(track.artist) — \(track.title)"
         updateNowPlayingInfo()
-        fetchArtworkIfNeeded(for: track)
+    }
+
+    private func prepareNextTrack() {
+        prefetchTask?.cancel()
+        guard let nextIdx = computeNextIndex(), nextIdx < queue.count else {
+            prefetchedNext = nil
+            return
+        }
+        let nextTrack = queue[nextIdx]
+        let afterIdx: Int? = (!shuffle && repeatMode != .one && queue.count > 2)
+            ? (nextIdx + 1 < queue.count ? nextIdx + 1 : (repeatMode == .all ? 0 : nil))
+            : nil
+        let afterTrack = afterIdx.map { queue[$0] }
+
+        if let pref = prefetchedNext,
+           pref.trackId == nextTrack.fullId,
+           FileManager.default.fileExists(atPath: pref.fileURL.path) {
+            if let afterTrack {
+                prefetchTask = Task { [weak self] in
+                    _ = try? await self?.vkClient?.resolvePlayableFileURL(for: afterTrack)
+                }
+            }
+            return
+        }
+
+        prefetchTask = Task { [weak self] in
+            guard let self, let vk = self.vkClient else { return }
+            if let (url, fresh) = try? await vk.resolvePlayableFileURL(for: nextTrack) {
+                guard !Task.isCancelled else { return }
+                let resolvedTrack = fresh ?? nextTrack
+                if let fresh {
+                    self.updateTrackMetadata(fresh)
+                }
+                self.prefetchedNext = (nextTrack.fullId, url, resolvedTrack)
+            }
+            if !Task.isCancelled, let afterTrack {
+                _ = try? await vk.resolvePlayableFileURL(for: afterTrack)
+            }
+        }
+    }
+
+    private func checkCrossfadeTrigger() {
+        guard crossfadeSecs > 0,
+              isPlaying,
+              !didTriggerTransitionForCurrent,
+              duration > Double(crossfadeSecs) + 2.0 else {
+            return
+        }
+        let remaining = duration - currentTime
+        guard remaining <= Double(crossfadeSecs) else { return }
+        guard let nextIdx = computeNextIndex(), nextIdx < queue.count else { return }
+        let expectedId = queue[nextIdx].fullId
+        guard let pref = prefetchedNext,
+              pref.trackId == expectedId,
+              FileManager.default.fileExists(atPath: pref.fileURL.path) else {
+            return
+        }
+        startCrossfadeTransition(to: nextIdx, prefetched: pref)
+    }
+
+    private func startCrossfadeTransition(
+        to nextIdx: Int,
+        prefetched: (trackId: String, fileURL: URL, track: VKTrack)
+    ) {
+        didTriggerTransitionForCurrent = true
+        cleanupObservers()
+        fadingPlayer?.pause()
+        fadingPlayer = player
+        fadingStartDate = Date()
+        player = nil
+
+        if let prev = currentIndex, prev != nextIdx {
+            history.append(prev)
+            if history.count > 200 {
+                history.removeFirst()
+            }
+        }
+
+        self.currentIndex = nextIdx
+        self.currentTrack = prefetched.track
+        self.plannedNextIndex = nil
+        self.prefetchedNext = nil
+        self.loadGeneration &+= 1
+
+        vkClient?.recordPlayedTrack(prefetched.track)
+        fetchArtworkIfNeeded(for: prefetched.track)
+
+        let cfDur = Double(crossfadeSecs)
+        startPlayback(fileOrStreamURL: prefetched.fileURL, track: prefetched.track, crossfadeInDuration: cfDur)
+        prepareNextTrack()
+    }
+
+    private func startCrossfadeTimerIfNeeded() {
+        crossfadeTimer?.invalidate()
+        crossfadeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateCrossfadeEnvelopes()
+            }
+        }
+    }
+
+    private func updateCrossfadeEnvelopes() {
+        let baseGain = effectiveVolume
+        let dur = max(0.1, activeFadeDuration)
+
+        if let fading = fadingPlayer, let fStart = fadingStartDate {
+            let t = min(1.0, max(0.0, Date().timeIntervalSince(fStart) / dur))
+            if t >= 1.0 {
+                fading.pause()
+                fadingPlayer = nil
+                fadingStartDate = nil
+            } else {
+                fading.volume = isMuted ? 0 : Float(1.0 - t) * baseGain
+            }
+        }
+
+        if let inStart = fadeInStartDate {
+            let t = min(1.0, max(0.0, Date().timeIntervalSince(inStart) / dur))
+            player?.volume = Float(t) * baseGain
+            if t >= 1.0 {
+                fadeInStartDate = nil
+                player?.volume = baseGain
+            }
+        }
+
+        if fadingPlayer == nil && fadeInStartDate == nil {
+            crossfadeTimer?.invalidate()
+            crossfadeTimer = nil
+        }
+    }
+
+    private func stopCrossfadeImmediate() {
+        crossfadeTimer?.invalidate()
+        crossfadeTimer = nil
+        fadingPlayer?.pause()
+        fadingPlayer = nil
+        fadingStartDate = nil
+        fadeInStartDate = nil
+        activeFadeDuration = 0
     }
 
     private func cleanupObservers() {

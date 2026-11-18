@@ -17,6 +17,7 @@ final class VKAPIClient: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var downloadedIds: Set<String> = []
     @Published var downloadingIds: Set<String> = []
+    @Published var addedIds: Set<String> = []
     @Published var batchDownloading: Bool = false
 
     private var token: String = ""
@@ -144,6 +145,13 @@ final class VKAPIClient: ObservableObject {
             statusText = "\(offline.count) на диске"
             return
         }
+        if section == .recentlyPlayed {
+            let recent = LocalStorage.loadRecentTracks()
+            self.tracks = recent
+            refreshDownloadedSet()
+            statusText = "\(recent.count) в истории"
+            return
+        }
 
         guard hasSavedSession else {
             statusText = "Войдите в VK, чтобы загрузить музыку"
@@ -156,7 +164,9 @@ final class VKAPIClient: ObservableObject {
             let loaded: [VKTrack]
             switch section {
             case .myMusic:
-                loaded = try await fetchMyAudio(count: 250)
+                loaded = try await fetchMyAudio(count: 1000)
+            case .recentlyPlayed:
+                loaded = LocalStorage.loadRecentTracks()
             case .recommendations:
                 loaded = try await fetchRecommendations(count: 100)
             case .popular:
@@ -175,6 +185,23 @@ final class VKAPIClient: ObservableObject {
             statusText = error.localizedDescription
         }
         isLoading = false
+    }
+
+    func recordPlayedTrack(_ track: VKTrack) {
+        let updated = LocalStorage.recordRecentTrack(track)
+        if currentSection == .recentlyPlayed {
+            tracks = updated
+            refreshDownloadedSet()
+        }
+    }
+
+    func clearRecentTracks() {
+        LocalStorage.clearRecentTracks()
+        if currentSection == .recentlyPlayed {
+            tracks = []
+            refreshDownloadedSet()
+            statusText = "История прослушивания очищена"
+        }
     }
 
     func refreshDownloadedSet() {
@@ -331,7 +358,7 @@ final class VKAPIClient: ObservableObject {
             throw apiError("Некорректный метод VK API")
         }
 
-        for attempt in 0..<2 {
+        for attempt in 0..<4 {
             await waitRateLimit()
 
             var formParams = params
@@ -359,11 +386,11 @@ final class VKAPIClient: ObservableObject {
                 let code = (errObj["error_code"] as? NSNumber)?.intValue ?? -1
                 let msg = (errObj["error_msg"] as? String) ?? "Unknown error"
 
-                if code == 5 && attempt == 0 {
+                if code == 5 && attempt < 3 {
                     activeToken = try await refreshWebToken()
                     continue
                 }
-                if (code == 6 || code == 9) && attempt == 0 {
+                if (code == 6 || code == 9) && attempt < 3 {
                     try? await Task.sleep(nanoseconds: code == 6 ? 1_200_000_000 : 2_200_000_000)
                     continue
                 }
@@ -476,13 +503,47 @@ final class VKAPIClient: ObservableObject {
                 "owner_id": "\(track.ownerId)",
                 "audio_id": "\(track.id)"
             ])
+            addedIds.insert(track.fullId)
             statusText = "Добавлено: \(track.artist) — \(track.title)"
         } catch {
             statusText = "Ошибка добавления: \(error.localizedDescription)"
         }
     }
 
-    // MARK: - Offline Downloading
+    func fetchTrackById(ownerId: Int64, id: Int64) async throws -> VKTrack {
+        let res = try await callAPI(method: "audio.getById", params: [
+            "audios": "\(ownerId)_\(id)"
+        ])
+        let items = (res as? [[String: Any]])
+            ?? ((res as? [String: Any])?["items"] as? [[String: Any]])
+            ?? []
+        guard let track = parseTracks(items).first else {
+            throw apiError("Не удалось обновить ссылку на трек")
+        }
+        return track
+    }
+
+    // MARK: - Playback Stream Resolution & Offline Downloading
+
+    func resolvePlayableFileURL(for track: VKTrack) async throws -> (URL, VKTrack?) {
+        if let localURL = LocalStorage.findDownloadedFile(for: track) {
+            return (localURL, nil)
+        }
+        if track.url.hasPrefix("file://"), let fileURL = URL(string: track.url) {
+            return (fileURL, nil)
+        }
+        if let cachedURL = LocalStorage.findCachedAudioFile(for: track) {
+            return (cachedURL, nil)
+        }
+
+        let (fileData, ext, freshTrack) = try await downloadAudioWithRefresh(for: track)
+        let savedURL = try LocalStorage.storeCachedAudioFile(
+            data: fileData,
+            for: freshTrack ?? track,
+            ext: ext
+        )
+        return (savedURL, freshTrack)
+    }
 
     func downloadTrack(_ track: VKTrack) async {
         let fid = track.fullId
@@ -533,36 +594,62 @@ final class VKAPIClient: ObservableObject {
     }
 
     private func performDownload(track: VKTrack) async throws -> URL {
-        guard let url = URL(string: track.url) else {
+        if let cached = LocalStorage.findCachedAudioFile(for: track),
+           let data = try? Data(contentsOf: cached),
+           !data.isEmpty {
+            let ext = cached.pathExtension.isEmpty ? "mp3" : cached.pathExtension
+            let targetURL = LocalStorage.downloadsDirectory.appendingPathComponent("\(track.safeFilenameBase).\(ext)")
+            try data.write(to: targetURL, options: .atomic)
+            return targetURL
+        }
+
+        let (fileData, ext, _) = try await downloadAudioWithRefresh(for: track)
+        let targetURL = LocalStorage.downloadsDirectory.appendingPathComponent("\(track.safeFilenameBase).\(ext)")
+        try fileData.write(to: targetURL, options: .atomic)
+        return targetURL
+    }
+
+    private func downloadAudioWithRefresh(for track: VKTrack) async throws -> (Data, String, VKTrack?) {
+        if !track.url.isEmpty {
+            do {
+                let (data, ext) = try await downloadRawAudio(from: track.url)
+                return (data, ext, nil)
+            } catch {
+                guard track.id > 0 else { throw error }
+            }
+        }
+        guard track.id > 0 else {
+            throw apiError("Неверная ссылка трека")
+        }
+        let fresh = try await fetchTrackById(ownerId: track.ownerId, id: track.id)
+        if let idx = tracks.firstIndex(where: { $0.fullId == fresh.fullId }) {
+            tracks[idx] = fresh
+        }
+        let (data, ext) = try await downloadRawAudio(from: fresh.url)
+        return (data, ext, fresh)
+    }
+
+    private func downloadRawAudio(from urlString: String) async throws -> (Data, String) {
+        guard let url = URL(string: urlString) else {
             throw apiError("Неверная ссылка трека")
         }
 
-        let fileData: Data
-        let ext: String
-
-        if track.url.contains(".m3u8") {
-            if let mp3URL = HLSDemuxer.tryM3u8ToMp3Url(track.url),
+        if urlString.contains(".m3u8") {
+            if let mp3URL = HLSDemuxer.tryM3u8ToMp3Url(urlString),
                let (candidateData, resp) = try? await fetchRaw(url: mp3URL),
                (resp as? HTTPURLResponse)?.statusCode == 200,
                looksLikeMP3(candidateData) {
-                fileData = candidateData
-                ext = "mp3"
-            } else {
-                fileData = try await HLSDemuxer.fetchHLSAsAAC(from: url, session: session, userAgent: Self.desktopUserAgent)
-                ext = "aac"
+                return (candidateData, "mp3")
             }
+            let aac = try await HLSDemuxer.fetchHLSAsAAC(from: url, session: session, userAgent: Self.desktopUserAgent)
+            return (aac, "aac")
         } else {
             let (data, resp) = try await fetchRaw(url: url)
             if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 throw apiError("HTTP \(http.statusCode)")
             }
-            fileData = data
-            ext = "mp3"
+            return (data, "mp3")
         }
-
-        let targetURL = LocalStorage.downloadsDirectory.appendingPathComponent("\(track.safeFilenameBase).\(ext)")
-        try fileData.write(to: targetURL, options: .atomic)
-        return targetURL
     }
 
     private func fetchRaw(url: URL) async throws -> (Data, URLResponse) {

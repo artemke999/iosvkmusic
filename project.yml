@@ -23,12 +23,11 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: VK Music Studio
+        CFBundleDisplayName: VK Music
         CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "1"
         UILaunchScreen:
           UIColorName: ""
-        UIUserInterfaceStyle: Dark
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIBackgroundModes:
@@ -39,7 +38,6 @@ targets:
           NSAllowsArbitraryLoads: true
     settings:
       base:
-        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_ALLOWED: "NO"

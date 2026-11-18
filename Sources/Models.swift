@@ -44,6 +44,7 @@ struct VKUserInfo: Codable {
 
 enum AppSection: Hashable {
     case myMusic
+    case recentlyPlayed
     case recommendations
     case popular
     case downloaded
@@ -53,6 +54,7 @@ enum AppSection: Hashable {
     var title: String {
         switch self {
         case .myMusic: return "Моя музыка"
+        case .recentlyPlayed: return "Недавно"
         case .recommendations: return "Рекомендации"
         case .popular: return "Популярное"
         case .downloaded: return "На диске"
@@ -74,6 +76,18 @@ enum LocalStorage {
 
     static var offlineIndexFile: URL {
         downloadsDirectory.appendingPathComponent(".tracks_index.json")
+    }
+
+    static var recentTracksFile: URL {
+        downloadsDirectory.appendingPathComponent(".recent_tracks.json")
+    }
+
+    static var audioCacheDirectory: URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vk_audio_cache", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
     }
 
     static func sanitizeFilename(_ raw: String) -> String {
@@ -140,5 +154,78 @@ enum LocalStorage {
             }
         }
         return result
+    }
+
+    static func loadRecentTracks() -> [VKTrack] {
+        guard let data = try? Data(contentsOf: recentTracksFile),
+              let decoded = try? JSONDecoder().decode([VKTrack].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+
+    static func saveRecentTracks(_ tracks: [VKTrack]) {
+        guard let data = try? JSONEncoder().encode(tracks) else { return }
+        try? data.write(to: recentTracksFile, options: .atomic)
+    }
+
+    static func recordRecentTrack(_ track: VKTrack) -> [VKTrack] {
+        var list = loadRecentTracks()
+        list.removeAll { $0.fullId == track.fullId }
+        list.insert(track, at: 0)
+        if list.count > 200 {
+            list = Array(list.prefix(200))
+        }
+        saveRecentTracks(list)
+        return list
+    }
+
+    static func clearRecentTracks() {
+        try? FileManager.default.removeItem(at: recentTracksFile)
+    }
+
+    static func findCachedAudioFile(for track: VKTrack) -> URL? {
+        let dir = audioCacheDirectory
+        for ext in ["mp3", "aac"] {
+            let candidate = dir.appendingPathComponent("\(track.fullId).\(ext)")
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: candidate.path),
+               let size = attrs[.size] as? NSNumber,
+               size.intValue > 0 {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    static func storeCachedAudioFile(data: Data, for track: VKTrack, ext: String) throws -> URL {
+        let dir = audioCacheDirectory
+        for oldExt in ["mp3", "aac"] where oldExt != ext {
+            let stale = dir.appendingPathComponent("\(track.fullId).\(oldExt)")
+            try? FileManager.default.removeItem(at: stale)
+        }
+        let target = dir.appendingPathComponent("\(track.fullId).\(ext)")
+        try data.write(to: target, options: .atomic)
+        trimCacheIfNeeded(in: dir, maxFiles: 12)
+        return target
+    }
+
+    private static func trimCacheIfNeeded(in dir: URL, maxFiles: Int) {
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ), files.count > maxFiles else {
+            return
+        }
+        let sorted = files.sorted { lhs, rhs in
+            let lDate = (try? lhs.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
+            let rDate = (try? rhs.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
+            return lDate < rDate
+        }
+        let excess = sorted.count - maxFiles
+        for file in sorted.prefix(excess) {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 }

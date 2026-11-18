@@ -34,6 +34,43 @@ enum HLSDemuxer {
         try await fetchHLSInner(url: m3u8URL, session: session, userAgent: userAgent, depth: 0)
     }
 
+    private struct SegmentJob: Sendable {
+        let index: Int
+        let segURL: URL
+        let keyData: Data?
+        let iv: Data
+    }
+
+    private struct RawSegmentSpec {
+        let index: Int
+        let segURL: URL
+        let keyURL: URL?
+        let iv: Data
+    }
+
+    private static func makeSequenceIV(_ seq: UInt64) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        var bigEndianSeq = seq.bigEndian
+        withUnsafeBytes(of: &bigEndianSeq) { ptr in
+            for idx in 0..<8 {
+                bytes[8 + idx] = ptr[idx]
+            }
+        }
+        return Data(bytes)
+    }
+
+    private static func fetchAndDecryptSegment(
+        _ job: SegmentJob,
+        session: URLSession,
+        userAgent: String
+    ) async throws -> (Int, Data) {
+        var segBytes = try await fetchData(url: job.segURL, session: session, userAgent: userAgent)
+        if let keyData = job.keyData, keyData.count == kCCKeySizeAES128, !segBytes.isEmpty {
+            segBytes = try decryptAES128CBC(data: segBytes, key: keyData, iv: job.iv)
+        }
+        return (job.index, segBytes)
+    }
+
     private static func fetchHLSInner(url: URL, session: URLSession, userAgent: String, depth: Int) async throws -> Data {
         guard depth <= 2 else {
             throw NSError(domain: "HLSDemuxer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Слишком глубокий m3u8 плейлист"])
@@ -45,11 +82,11 @@ enum HLSDemuxer {
         }
 
         var mediaSeq: UInt64 = 0
-        var keyCache: [String: Data] = [:]
         var currentKeyURL: URL?
         var currentIV: Data?
         var segIdx: UInt64 = 0
-        var outAAC = Data()
+        var specs: [RawSegmentSpec] = []
+        var uniqueKeyURLs: [String: URL] = [:]
 
         let lines = playlistText.components(separatedBy: .newlines)
         for rawLine in lines {
@@ -67,8 +104,10 @@ enum HLSDemuxer {
                     currentKeyURL = nil
                     currentIV = nil
                 } else if line.contains("METHOD=AES-128") {
-                    if let uri = extractAttribute(line, prefix: "URI=\"", suffix: "\"") {
-                        currentKeyURL = URL(string: uri, relativeTo: url)?.absoluteURL
+                    if let uri = extractAttribute(line, prefix: "URI=\"", suffix: "\""),
+                       let resolvedKey = URL(string: uri, relativeTo: url)?.absoluteURL {
+                        currentKeyURL = resolvedKey
+                        uniqueKeyURLs[resolvedKey.absoluteString] = resolvedKey
                     }
                     if let ivHex = extractAttribute(line, prefix: "IV=0x", suffix: ",")
                         ?? line.components(separatedBy: "IV=0x").dropFirst().first {
@@ -88,39 +127,61 @@ enum HLSDemuxer {
             }
 
             guard let segURL = URL(string: line, relativeTo: url)?.absoluteURL else { continue }
-            var segBytes = try await fetchData(url: segURL, session: session, userAgent: userAgent)
+            let ivData = currentIV ?? makeSequenceIV(mediaSeq + segIdx)
+            specs.append(RawSegmentSpec(
+                index: specs.count,
+                segURL: segURL,
+                keyURL: currentKeyURL,
+                iv: ivData
+            ))
+            segIdx += 1
+        }
 
-            if let keyURL = currentKeyURL {
-                let keyData: Data
-                if let cached = keyCache[keyURL.absoluteString] {
-                    keyData = cached
-                } else {
-                    let fetched = try await fetchData(url: keyURL, session: session, userAgent: userAgent)
-                    keyCache[keyURL.absoluteString] = fetched
-                    keyData = fetched
-                }
+        guard !specs.isEmpty else {
+            throw NSError(domain: "HLSDemuxer", code: -3, userInfo: [NSLocalizedDescriptionKey: "Не удалось извлечь сегменты HLS"])
+        }
 
-                let ivData: Data
-                if let iv = currentIV {
-                    ivData = iv
-                } else {
-                    var bytes = [UInt8](repeating: 0, count: 16)
-                    var bigEndianSeq = (mediaSeq + segIdx).bigEndian
-                    withUnsafeBytes(of: &bigEndianSeq) { ptr in
-                        for idx in 0..<8 {
-                            bytes[8 + idx] = ptr[idx]
-                        }
-                    }
-                    ivData = Data(bytes)
-                }
+        var keyCache: [String: Data] = [:]
+        for (keyStr, keyURL) in uniqueKeyURLs {
+            keyCache[keyStr] = try await fetchData(url: keyURL, session: session, userAgent: userAgent)
+        }
 
-                if keyData.count == kCCKeySizeAES128 && !segBytes.isEmpty {
-                    segBytes = try decryptAES128CBC(data: segBytes, key: keyData, iv: ivData)
+        let jobs: [SegmentJob] = specs.map { spec in
+            SegmentJob(
+                index: spec.index,
+                segURL: spec.segURL,
+                keyData: spec.keyURL.flatMap { keyCache[$0.absoluteString] },
+                iv: spec.iv
+            )
+        }
+
+        var buffers = Array<Data?>(repeating: nil, count: jobs.count)
+        try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+            var nextIdx = 0
+            let maxConcurrent = min(8, jobs.count)
+            while nextIdx < maxConcurrent {
+                let job = jobs[nextIdx]
+                nextIdx += 1
+                group.addTask {
+                    try await fetchAndDecryptSegment(job, session: session, userAgent: userAgent)
                 }
             }
 
-            demuxTSAudio(tsData: segBytes, into: &outAAC)
-            segIdx += 1
+            while let (idx, tsData) = try await group.next() {
+                buffers[idx] = tsData
+                if nextIdx < jobs.count {
+                    let job = jobs[nextIdx]
+                    nextIdx += 1
+                    group.addTask {
+                        try await fetchAndDecryptSegment(job, session: session, userAgent: userAgent)
+                    }
+                }
+            }
+        }
+
+        var outAAC = Data()
+        for tsData in buffers.compactMap({ $0 }) {
+            demuxTSAudio(tsData: tsData, into: &outAAC)
         }
 
         if outAAC.isEmpty {

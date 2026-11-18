@@ -10,7 +10,6 @@ struct VKMusicStudioApp: App {
             ContentView()
                 .environmentObject(vkClient)
                 .environmentObject(player)
-                .preferredColorScheme(.dark)
                 .onAppear {
                     player.configure(vkClient: vkClient)
                     if vkClient.hasSavedSession {
