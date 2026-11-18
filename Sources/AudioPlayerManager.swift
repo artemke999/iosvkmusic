@@ -56,9 +56,11 @@ final class AudioPlayerManager: ObservableObject {
     private var activeFadeDuration: Double = 0
     private var crossfadeTimer: Timer?
 
+    @Published private(set) var queue: [VKTrack] = []
+    @Published private(set) var currentIndex: Int?
+
     private weak var vkClient: VKAPIClient?
-    private var queue: [VKTrack] = []
-    private var currentIndex: Int?
+    private var liveElapsedSeconds: Double = 0
     private var history: [Int] = []
     private var cachedArtwork: (String, UIImage)?
 
@@ -583,6 +585,7 @@ final class AudioPlayerManager: ObservableObject {
             let targetFrame = min(file.length - 1, max(0, AVAudioFramePosition(clamped * sr)))
             let remaining = AVAudioFrameCount(max(1, file.length - targetFrame))
             engineBaseSeconds = Double(targetFrame) / sr
+            liveElapsedSeconds = engineBaseSeconds
             currentTime = engineBaseSeconds
             didTriggerTransitionForCurrent = false
 
@@ -596,6 +599,7 @@ final class AudioPlayerManager: ObservableObject {
             let cmTime = CMTime(seconds: clamped, preferredTimescale: 600)
             player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                 Task { @MainActor in
+                    self?.liveElapsedSeconds = clamped
                     self?.currentTime = clamped
                     self?.updateNowPlayingInfo()
                 }
@@ -663,6 +667,59 @@ final class AudioPlayerManager: ObservableObject {
         } else {
             playQueueIndex(nxt, pushHistory: true)
         }
+    }
+
+    func jumpToQueueIndex(_ index: Int) {
+        guard queue.indices.contains(index) else { return }
+        if index == currentIndex {
+            togglePlayPause()
+            return
+        }
+        plannedNextIndex = nil
+        prefetchedNext = nil
+        playQueueIndex(index, pushHistory: true)
+    }
+
+    func playNext(_ track: VKTrack) {
+        if queue.isEmpty || currentTrack == nil {
+            playFromList([track], index: 0)
+            return
+        }
+        let insertIdx = min(queue.count, (currentIndex ?? 0) + 1)
+        if queue.indices.contains(insertIdx) && queue[insertIdx].fullId == track.fullId {
+            return
+        }
+        queue.insert(track, at: insertIdx)
+        plannedNextIndex = nil
+        prefetchedNext = nil
+        prepareNextTrack()
+        vkClient?.statusText = "Далее: \(track.artist) — \(track.title)"
+    }
+
+    func addToQueue(_ track: VKTrack) {
+        if queue.isEmpty || currentTrack == nil {
+            playFromList([track], index: 0)
+            return
+        }
+        queue.append(track)
+        plannedNextIndex = nil
+        prepareNextTrack()
+        vkClient?.statusText = "В очередь: \(track.artist) — \(track.title)"
+    }
+
+    func removeFromQueue(at index: Int) {
+        guard queue.indices.contains(index), index != currentIndex else { return }
+        queue.remove(at: index)
+        if let cur = currentIndex, index < cur {
+            currentIndex = cur - 1
+        }
+        history = history.compactMap { oldIdx in
+            if oldIdx == index { return nil }
+            return oldIdx > index ? oldIdx - 1 : oldIdx
+        }
+        plannedNextIndex = nil
+        prefetchedNext = nil
+        prepareNextTrack()
     }
 
     func previousTrack() {
@@ -856,6 +913,7 @@ final class AudioPlayerManager: ObservableObject {
 
         activeFile = file
         engineBaseSeconds = 0
+        liveElapsedSeconds = 0
         currentTime = 0
         didTriggerTransitionForCurrent = false
 
@@ -933,7 +991,11 @@ final class AudioPlayerManager: ObservableObject {
         }
         let secs = engineBaseSeconds + Double(playerTime.sampleTime) / playerTime.sampleRate
         if secs.isFinite {
-            currentTime = duration > 0 ? min(duration, max(0, secs)) : max(0, secs)
+            let clamped = duration > 0 ? min(duration, max(0, secs)) : max(0, secs)
+            liveElapsedSeconds = clamped
+            if abs(clamped - currentTime) >= 0.25 {
+                currentTime = clamped
+            }
         }
         checkCrossfadeTrigger()
     }
@@ -969,6 +1031,7 @@ final class AudioPlayerManager: ObservableObject {
         let item = AVPlayerItem(asset: asset)
         let newPlayer = AVPlayer(playerItem: item)
         self.player = newPlayer
+        self.liveElapsedSeconds = 0
         self.currentTime = 0
         self.duration = Double(max(0, track.duration))
         self.didTriggerTransitionForCurrent = false
@@ -983,14 +1046,18 @@ final class AudioPlayerManager: ObservableObject {
         }
 
         timeObserver = newPlayer.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
+            forInterval: CMTime(seconds: 0.15, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
             Task { @MainActor in
                 guard let self else { return }
                 let secs = time.seconds
                 if secs.isFinite {
-                    self.currentTime = max(0, secs)
+                    let clamped = max(0, secs)
+                    self.liveElapsedSeconds = clamped
+                    if abs(clamped - self.currentTime) >= 0.25 {
+                        self.currentTime = clamped
+                    }
                 }
                 if self.duration <= 0,
                    let itemDur = self.player?.currentItem?.duration.seconds,
@@ -1067,7 +1134,7 @@ final class AudioPlayerManager: ObservableObject {
               duration > Double(crossfadeSecs) + 2.0 else {
             return
         }
-        let remaining = duration - currentTime
+        let remaining = duration - liveElapsedSeconds
         guard remaining <= Double(crossfadeSecs) else { return }
         guard let nextIdx = computeNextIndex(), nextIdx < queue.count else { return }
         let expectedId = queue[nextIdx].fullId
@@ -1212,17 +1279,14 @@ final class AudioPlayerManager: ObservableObject {
     // MARK: - Artwork & Lock Screen Metadata
 
     private func fetchArtworkIfNeeded(for track: VKTrack) {
-        guard !track.coverUrl.isEmpty, let url = URL(string: track.coverUrl) else { return }
+        guard !track.coverUrl.isEmpty else { return }
         if cachedArtwork?.0 == track.coverUrl {
             updateNowPlayingInfo()
             return
         }
         let coverStr = track.coverUrl
         Task { [weak self] in
-            let image: UIImage? = await Task.detached(priority: .utility) {
-                guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
-                return UIImage(data: data)
-            }.value
+            let image = await CoverImageCache.shared.image(for: coverStr)
             guard let self, let image else { return }
             self.cachedArtwork = (coverStr, image)
             if self.currentTrack?.coverUrl == coverStr {

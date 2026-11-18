@@ -11,6 +11,7 @@ final class VKAPIClient: ObservableObject {
 
     @Published var user: VKUserInfo?
     @Published var playlists: [VKPlaylist] = []
+    @Published var offlinePlaylistGroups: [VKOfflinePlaylist] = []
     @Published var tracks: [VKTrack] = []
     @Published var currentSection: AppSection = .myMusic
     @Published var statusText: String = "Войдите в VK, чтобы загрузить музыку"
@@ -19,11 +20,13 @@ final class VKAPIClient: ObservableObject {
     @Published var downloadingIds: Set<String> = []
     @Published var addedIds: Set<String> = []
     @Published var batchDownloading: Bool = false
+    @Published var downloadingPlaylistId: String?
 
     private var token: String = ""
     private var cookies: [String: String] = [:]
     private var lastApiCall: Date = .distantPast
     private var isRefreshing: Bool = false
+    private var sectionLoadGeneration: UInt64 = 0
 
     private let session: URLSession
 
@@ -51,6 +54,8 @@ final class VKAPIClient: ObservableObject {
         if uid > 0 && !uname.isEmpty {
             self.user = VKUserInfo(id: uid, name: uname)
         }
+        self.playlists = LocalStorage.loadCachedPlaylists()
+        self.offlinePlaylistGroups = LocalStorage.loadOfflinePlaylistsWithAvailableFiles()
     }
 
     var hasSavedSession: Bool {
@@ -114,7 +119,11 @@ final class VKAPIClient: ObservableObject {
                     saveSession(token: token, cookies: cookies, user: info)
                 }
                 await loadSection(.myMusic)
-                self.playlists = (try? await fetchPlaylists()) ?? []
+                if let fetched = try? await fetchPlaylists(count: 100), !fetched.isEmpty {
+                    self.playlists = fetched
+                    LocalStorage.saveCachedPlaylists(fetched)
+                }
+                refreshOfflineGroups()
             } catch {
                 statusText = error.localizedDescription
             }
@@ -132,16 +141,25 @@ final class VKAPIClient: ObservableObject {
         }
         let info = try await verifyUser()
         saveSession(token: self.token, cookies: self.cookies, user: info)
-        self.playlists = (try? await fetchPlaylists()) ?? []
+        if let fetched = try? await fetchPlaylists(count: 100) {
+            self.playlists = fetched
+            LocalStorage.saveCachedPlaylists(fetched)
+        }
+        refreshOfflineGroups()
         await loadSection(.myMusic)
     }
 
     func loadSection(_ section: AppSection) async {
+        sectionLoadGeneration &+= 1
+        let gen = sectionLoadGeneration
         currentSection = section
+
         if section == .downloaded {
             let offline = LocalStorage.loadOfflineTracks()
             self.tracks = offline
+            self.offlinePlaylistGroups = LocalStorage.loadOfflinePlaylistsWithAvailableFiles()
             refreshDownloadedSet()
+            isLoading = false
             statusText = "\(offline.count) на диске"
             return
         }
@@ -149,17 +167,43 @@ final class VKAPIClient: ObservableObject {
             let recent = LocalStorage.loadRecentTracks()
             self.tracks = recent
             refreshDownloadedSet()
+            isLoading = false
             statusText = "\(recent.count) в истории"
             return
         }
 
+        if case .playlist(let pl) = section, pl.id < 0 {
+            if let group = offlinePlaylistGroups.first(where: { $0.id == pl.fullId }) {
+                self.tracks = group.tracks
+                refreshDownloadedSet()
+                isLoading = false
+                statusText = "\(group.tracks.count) на диске"
+                return
+            }
+        }
+
         guard hasSavedSession else {
+            if case .playlist(let pl) = section,
+               let cached = LocalStorage.loadPlaylistTracks(playlistFullId: pl.fullId) {
+                let filenames = LocalStorage.downloadedFilenamesSet()
+                let available = cached.filter { LocalStorage.hasDownloadedFile(for: $0, in: filenames) }
+                self.tracks = available.isEmpty ? cached : available
+                refreshDownloadedSet()
+                statusText = "\(self.tracks.count) оффлайн"
+                return
+            }
             statusText = "Войдите в VK, чтобы загрузить музыку"
             return
         }
 
         isLoading = true
         statusText = "Загрузка треков..."
+        defer {
+            if gen == self.sectionLoadGeneration {
+                isLoading = false
+            }
+        }
+
         do {
             let loaded: [VKTrack]
             switch section {
@@ -172,27 +216,44 @@ final class VKAPIClient: ObservableObject {
             case .popular:
                 loaded = try await fetchPopular(count: 100)
             case .playlist(let pl):
-                loaded = try await fetchPlaylistAudio(ownerId: pl.ownerId, playlistId: pl.id, accessKey: pl.accessKey, count: 200)
+                let plTracks = try await fetchPlaylistAudio(
+                    ownerId: pl.ownerId,
+                    playlistId: pl.id,
+                    accessKey: pl.accessKey,
+                    count: 200,
+                    fallbackCoverUrl: pl.coverUrl,
+                    fallbackAlbumTitle: pl.title
+                )
+                LocalStorage.savePlaylistTracks(playlist: pl, tracks: plTracks)
+                backfillPlaylistCoverIfNeeded(pl: pl, from: plTracks)
+                loaded = plTracks
             case .search(let query):
                 loaded = try await searchAudio(query: query, count: 100)
             case .downloaded:
                 loaded = LocalStorage.loadOfflineTracks()
             }
+            guard gen == self.sectionLoadGeneration else { return }
             self.tracks = loaded
             refreshDownloadedSet()
             statusText = "\(loaded.count) треков"
         } catch {
-            statusText = error.localizedDescription
+            guard gen == self.sectionLoadGeneration else { return }
+            if case .playlist(let pl) = section,
+               let cached = LocalStorage.loadPlaylistTracks(playlistFullId: pl.fullId),
+               !cached.isEmpty {
+                let filenames = LocalStorage.downloadedFilenamesSet()
+                let available = cached.filter { LocalStorage.hasDownloadedFile(for: $0, in: filenames) }
+                self.tracks = available.isEmpty ? cached : available
+                refreshDownloadedSet()
+                statusText = available.isEmpty ? "Кэш плейлиста (\(cached.count))" : "Оффлайн: \(available.count) треков"
+            } else {
+                statusText = error.localizedDescription
+            }
         }
-        isLoading = false
     }
 
     func recordPlayedTrack(_ track: VKTrack) {
-        let updated = LocalStorage.recordRecentTrack(track)
-        if currentSection == .recentlyPlayed {
-            tracks = updated
-            refreshDownloadedSet()
-        }
+        _ = LocalStorage.recordRecentTrack(track)
     }
 
     func clearRecentTracks() {
@@ -204,12 +265,27 @@ final class VKAPIClient: ObservableObject {
         }
     }
 
+    func refreshOfflineGroups() {
+        offlinePlaylistGroups = LocalStorage.loadOfflinePlaylistsWithAvailableFiles()
+    }
+
     func refreshDownloadedSet() {
+        let filenames = LocalStorage.downloadedFilenamesSet()
         var set = Set<String>()
-        for tr in tracks where LocalStorage.findDownloadedFile(for: tr) != nil {
+        for tr in tracks where LocalStorage.hasDownloadedFile(for: tr, in: filenames) {
             set.insert(tr.fullId)
         }
         downloadedIds = set
+    }
+
+    private func backfillPlaylistCoverIfNeeded(pl: VKPlaylist, from loadedTracks: [VKTrack]) {
+        guard pl.coverUrl.isEmpty,
+              let firstCover = loadedTracks.first(where: { !$0.coverUrl.isEmpty })?.coverUrl,
+              let idx = playlists.firstIndex(where: { $0.fullId == pl.fullId }) else {
+            return
+        }
+        playlists[idx].coverUrl = firstCover
+        LocalStorage.saveCachedPlaylists(playlists)
     }
 
     // MARK: - Token Refresh via Persistent Cookies & WKHTTPCookieStore
@@ -446,12 +522,20 @@ final class VKAPIClient: ObservableObject {
                 ownerId: (it["owner_id"] as? NSNumber)?.int64Value ?? 0,
                 title: (it["title"] as? String) ?? "Без названия",
                 count: (it["count"] as? NSNumber)?.intValue ?? 0,
-                accessKey: (it["access_key"] as? String) ?? ""
+                accessKey: (it["access_key"] as? String) ?? "",
+                coverUrl: extractPlaylistCover(from: it)
             )
         }
     }
 
-    func fetchPlaylistAudio(ownerId: Int64, playlistId: Int64, accessKey: String, count: Int) async throws -> [VKTrack] {
+    func fetchPlaylistAudio(
+        ownerId: Int64,
+        playlistId: Int64,
+        accessKey: String,
+        count: Int,
+        fallbackCoverUrl: String = "",
+        fallbackAlbumTitle: String = ""
+    ) async throws -> [VKTrack] {
         var params = [
             "owner_id": "\(ownerId)",
             "album_id": "\(playlistId)",
@@ -462,7 +546,7 @@ final class VKAPIClient: ObservableObject {
         }
         let res = try await callAPI(method: "audio.get", params: params)
         let items = (res as? [String: Any])?["items"] as? [[String: Any]] ?? []
-        return parseTracks(items)
+        return parseTracks(items, fallbackCoverUrl: fallbackCoverUrl, fallbackAlbumTitle: fallbackAlbumTitle)
     }
 
     func searchAudio(query: String, count: Int) async throws -> [VKTrack] {
@@ -560,24 +644,65 @@ final class VKAPIClient: ObservableObject {
             let savedURL = try await performDownload(track: track)
             downloadedIds.insert(fid)
             saveTrackToOfflineIndex(track)
+            if !track.coverUrl.isEmpty {
+                Task { _ = await CoverImageCache.shared.image(for: track.coverUrl) }
+            }
+            refreshOfflineGroups()
             statusText = "Сохранено: \(savedURL.lastPathComponent)"
         } catch {
             statusText = "Ошибка скачивания: \(error.localizedDescription)"
         }
     }
 
+    func downloadPlaylist(_ pl: VKPlaylist) async {
+        guard downloadingPlaylistId == nil && !batchDownloading else { return }
+        downloadingPlaylistId = pl.fullId
+        statusText = "Подготовка плейлиста «\(pl.title)»..."
+        defer { downloadingPlaylistId = nil }
+
+        let plTracks: [VKTrack]
+        if let fetched = try? await fetchPlaylistAudio(
+            ownerId: pl.ownerId,
+            playlistId: pl.id,
+            accessKey: pl.accessKey,
+            count: 200,
+            fallbackCoverUrl: pl.coverUrl,
+            fallbackAlbumTitle: pl.title
+        ), !fetched.isEmpty {
+            plTracks = fetched
+            LocalStorage.savePlaylistTracks(playlist: pl, tracks: fetched)
+            backfillPlaylistCoverIfNeeded(pl: pl, from: fetched)
+        } else if let cached = LocalStorage.loadPlaylistTracks(playlistFullId: pl.fullId) {
+            plTracks = cached
+        } else {
+            statusText = "Не удалось загрузить треки плейлиста «\(pl.title)»"
+            return
+        }
+
+        if !pl.coverUrl.isEmpty {
+            Task { _ = await CoverImageCache.shared.image(for: pl.coverUrl) }
+        }
+        await downloadAll(plTracks)
+        refreshOfflineGroups()
+    }
+
     func downloadAll(_ list: [VKTrack]) async {
         guard !batchDownloading else { return }
-        let pending = list.filter { LocalStorage.findDownloadedFile(for: $0) == nil }
+        let filenames = LocalStorage.downloadedFilenamesSet()
+        let pending = list.filter { !LocalStorage.hasDownloadedFile(for: $0, in: filenames) }
         guard !pending.isEmpty else {
             statusText = "Все треки уже на диске"
             return
         }
         batchDownloading = true
-        defer { batchDownloading = false }
+        defer {
+            batchDownloading = false
+            refreshOfflineGroups()
+        }
 
         let total = pending.count
         var done = 0
+        var seenCovers = Set<String>()
         statusText = "Скачано 0 / \(total)..."
 
         for tr in pending {
@@ -586,6 +711,10 @@ final class VKAPIClient: ObservableObject {
             if (try? await performDownload(track: tr)) != nil {
                 downloadedIds.insert(fid)
                 saveTrackToOfflineIndex(tr)
+                if !tr.coverUrl.isEmpty && seenCovers.insert(tr.coverUrl).inserted {
+                    let cover = tr.coverUrl
+                    Task { _ = await CoverImageCache.shared.image(for: cover) }
+                }
             }
             downloadingIds.remove(fid)
             done += 1
@@ -666,30 +795,69 @@ final class VKAPIClient: ObservableObject {
 
     private func saveTrackToOfflineIndex(_ track: VKTrack) {
         var current = LocalStorage.loadOfflineTracks()
-        if !current.contains(where: { $0.fullId == track.fullId }) {
+        if let idx = current.firstIndex(where: { $0.fullId == track.fullId }) {
+            let old = current[idx]
+            if old.coverUrl != track.coverUrl || old.albumTitle != track.albumTitle {
+                current[idx] = track
+                LocalStorage.saveOfflineMetadata(current)
+            }
+        } else {
             current.insert(track, at: 0)
             LocalStorage.saveOfflineMetadata(current)
         }
     }
 
-    private func parseTracks(_ items: [[String: Any]]) -> [VKTrack] {
+    private func extractImageUrl(from dict: [String: Any]?) -> String {
+        guard let dict else { return "" }
+        for key in ["photo_600", "photo_300", "photo_270", "photo_135", "photo_68", "photo_34"] {
+            if let urlStr = dict[key] as? String, !urlStr.isEmpty {
+                return urlStr
+            }
+        }
+        return ""
+    }
+
+    private func extractPlaylistCover(from it: [String: Any]) -> String {
+        let topPhoto = extractImageUrl(from: it["photo"] as? [String: Any])
+        if !topPhoto.isEmpty { return topPhoto }
+
+        if let thumbs = it["thumbs"] as? [[String: Any]], let first = thumbs.first {
+            let thumbUrl = extractImageUrl(from: first)
+            if !thumbUrl.isEmpty { return thumbUrl }
+        }
+
+        if let orig = it["original"] as? [String: Any] {
+            let origPhoto = extractImageUrl(from: orig["photo"] as? [String: Any])
+            if !origPhoto.isEmpty { return origPhoto }
+            if let origThumbs = orig["thumbs"] as? [[String: Any]], let first = origThumbs.first {
+                let origThumbUrl = extractImageUrl(from: first)
+                if !origThumbUrl.isEmpty { return origThumbUrl }
+            }
+        }
+        return ""
+    }
+
+    private func parseTracks(
+        _ items: [[String: Any]],
+        fallbackCoverUrl: String = "",
+        fallbackAlbumTitle: String = ""
+    ) -> [VKTrack] {
         items.compactMap { it in
             let url = (it["url"] as? String) ?? ""
             guard !url.isEmpty else { return nil }
             let album = it["album"] as? [String: Any]
-            let thumb = album?["thumb"] as? [String: Any]
-            let cover = (thumb?["photo_300"] as? String)
-                ?? (thumb?["photo_270"] as? String)
-                ?? (thumb?["photo_135"] as? String)
-                ?? (thumb?["photo_68"] as? String)
-                ?? ""
+            let albumCover = extractImageUrl(from: album?["thumb"] as? [String: Any])
+            let itemCover = extractImageUrl(from: it["thumb"] as? [String: Any])
+            let cover = !albumCover.isEmpty ? albumCover : (!itemCover.isEmpty ? itemCover : fallbackCoverUrl)
+            let rawAlbumTitle = (album?["title"] as? String) ?? ""
+            let resolvedAlbum = rawAlbumTitle.isEmpty ? fallbackAlbumTitle : rawAlbumTitle
 
             return VKTrack(
                 id: (it["id"] as? NSNumber)?.int64Value ?? 0,
                 ownerId: (it["owner_id"] as? NSNumber)?.int64Value ?? 0,
                 artist: (it["artist"] as? String) ?? "Unknown Artist",
                 title: (it["title"] as? String) ?? "Untitled",
-                albumTitle: (album?["title"] as? String) ?? "",
+                albumTitle: resolvedAlbum,
                 duration: (it["duration"] as? NSNumber)?.intValue ?? 0,
                 url: url,
                 coverUrl: cover

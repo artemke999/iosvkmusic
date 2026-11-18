@@ -1,126 +1,29 @@
 import SwiftUI
 
-// MARK: - Design System & User Preset Models
+// MARK: - Themes & Layout Models
 
 enum AppThemeKind: String, CaseIterable, Identifiable {
     case skyShards = "sky-shards"
-    case eveSketch = "eve-sketch"
-    case dream17 = "dream-17"
-    case appleRetro = "apple-retro"
+    case airpodsProBlack = "airpods-pro-black"
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .skyShards: return "Sky Shards"
-        case .eveSketch: return "EVE II Sketchbook"
-        case .dream17: return "Dream 17"
-        case .appleRetro: return "Apple Retro SE"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .skyShards: return "Светлый коллаж, матовое стекло и осколки неба"
-        case .eveSketch: return "Тёплая бумага, тонкая тушь и сетка скетчбука"
-        case .dream17: return "Ночной бархат, мягкое свечение 17 и дымчатое стекло"
-        case .appleRetro: return "Алюминий iPod SE, OLED-блок и тактильные клавиши"
-        }
-    }
-
-    var tag: String {
-        switch self {
-        case .skyShards: return "空 // SHARDS"
-        case .eveSketch: return "EVE // ZINE"
-        case .dream17: return "17 // NIGHT"
-        case .appleRetro: return "iAUDIO // SE"
-        }
+    var toggled: AppThemeKind {
+        self == .skyShards ? .airpodsProBlack : .skyShards
     }
 
     var colorScheme: ColorScheme {
-        self == .dream17 ? .dark : .light
+        self == .skyShards ? .light : .dark
     }
 
-    var defaultBanner: BannerArtKind {
-        switch self {
-        case .skyShards: return .art2
-        case .eveSketch: return .art1
-        case .dream17: return .art4
-        case .appleRetro: return .art2
-        }
-    }
-}
-
-enum BannerArtKind: String, CaseIterable, Identifiable {
-    case art1
-    case art2
-    case art3
-    case art4
-    case none
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .art1: return "Арт 1 · EVE II"
-        case .art2: return "Арт 2 · Sky Shards"
-        case .art3: return "Арт 3 · Город"
-        case .art4: return "Арт 4 · 17 Night"
-        case .none: return "Без арта"
-        }
-    }
-
-    var assetName: String? {
-        switch self {
-        case .art1: return "Art1Eve"
-        case .art2: return "Art2Sky"
-        case .art3: return "Art3City"
-        case .art4: return "Art4Dream"
-        case .none: return nil
-        }
-    }
-
-    static func fallbackAsset(for track: VKTrack) -> String {
-        let names = ["Art2Sky", "Art1Eve", "Art3City", "Art4Dream"]
-        let idx = Int(abs(track.id) % Int64(names.count))
-        return names[idx]
-    }
-}
-
-enum RowDisplayStyle: String, CaseIterable, Identifiable {
-    case covers
-    case compact
-    case cards
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .covers: return "С обложками"
-        case .compact: return "Компактный"
-        case .cards: return "Карточки"
-        }
-    }
-}
-
-enum MiniPlayerStyle: String, CaseIterable, Identifiable {
-    case floating
-    case docked
-    case inline
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .floating: return "Капсула"
-        case .docked: return "У нижнего края"
-        case .inline: return "Встроенный"
-        }
+    var subtitleTag: String {
+        self == .skyShards ? "SKY SHARDS" : "OBSIDIAN PRO"
     }
 }
 
 enum NowPlayingTab: String, CaseIterable {
     case player
+    case queue
     case equalizer
 }
 
@@ -130,6 +33,7 @@ struct ThemePalette {
     let bgBottom: Color
     let surface: Color
     let surfaceMuted: Color
+    let surfaceActive: Color
     let border: Color
     let strongBorder: Color
     let textPrimary: Color
@@ -141,17 +45,21 @@ struct ThemePalette {
     let pillBg: Color
     let pillText: Color
     let miniBg: Color
-    let bannerText: Color
-    let bannerMuted: Color
+    let savedGreen: Color
+    let isDark: Bool
 
     init(_ kind: AppThemeKind) {
         self.kind = kind
+        self.savedGreen = Color(red: 48 / 255, green: 209 / 255, blue: 88 / 255)
+
         switch kind {
         case .skyShards:
+            self.isDark = false
             self.bgTop = Color(red: 223 / 255, green: 240 / 255, blue: 251 / 255)
             self.bgBottom = Color(red: 242 / 255, green: 247 / 255, blue: 252 / 255)
-            self.surface = Color.white.opacity(0.78)
+            self.surface = Color.white.opacity(0.80)
             self.surfaceMuted = Color(red: 217 / 255, green: 236 / 255, blue: 252 / 255).opacity(0.68)
+            self.surfaceActive = Color(red: 111 / 255, green: 176 / 255, blue: 236 / 255).opacity(0.24)
             self.border = Color(red: 88 / 255, green: 136 / 255, blue: 178 / 255).opacity(0.22)
             self.strongBorder = Color(red: 34 / 255, green: 62 / 255, blue: 92 / 255).opacity(0.32)
             self.textPrimary = Color(red: 22 / 255, green: 34 / 255, blue: 48 / 255)
@@ -162,79 +70,32 @@ struct ThemePalette {
             self.accentText = Color(red: 18 / 255, green: 62 / 255, blue: 107 / 255)
             self.pillBg = Color(red: 30 / 255, green: 53 / 255, blue: 77 / 255)
             self.pillText = Color(red: 245 / 255, green: 250 / 255, blue: 255 / 255)
-            self.miniBg = Color.white.opacity(0.88)
-            self.bannerText = Color(red: 22 / 255, green: 34 / 255, blue: 48 / 255)
-            self.bannerMuted = Color(red: 58 / 255, green: 79 / 255, blue: 102 / 255)
+            self.miniBg = Color.white.opacity(0.90)
 
-        case .eveSketch:
-            self.bgTop = Color(red: 246 / 255, green: 244 / 255, blue: 238 / 255)
-            self.bgBottom = Color(red: 242 / 255, green: 239 / 255, blue: 231 / 255)
-            self.surface = Color(red: 253 / 255, green: 252 / 255, blue: 248 / 255)
-            self.surfaceMuted = Color(red: 238 / 255, green: 234 / 255, blue: 224 / 255)
-            self.border = Color(red: 20 / 255, green: 20 / 255, blue: 23 / 255).opacity(0.16)
-            self.strongBorder = Color(red: 20 / 255, green: 20 / 255, blue: 23 / 255).opacity(0.68)
-            self.textPrimary = Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255)
-            self.textSecondary = Color(red: 90 / 255, green: 93 / 255, blue: 102 / 255)
-            self.textMuted = Color(red: 140 / 255, green: 144 / 255, blue: 156 / 255)
-            self.accent = Color(red: 85 / 255, green: 146 / 255, blue: 198 / 255)
-            self.accentSoft = Color(red: 220 / 255, green: 235 / 255, blue: 247 / 255)
-            self.accentText = Color(red: 16 / 255, green: 50 / 255, blue: 78 / 255)
-            self.pillBg = Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255)
-            self.pillText = Color(red: 253 / 255, green: 252 / 255, blue: 248 / 255)
-            self.miniBg = Color(red: 253 / 255, green: 252 / 255, blue: 248 / 255).opacity(0.95)
-            self.bannerText = Color(red: 22 / 255, green: 22 / 255, blue: 26 / 255)
-            self.bannerMuted = Color(red: 82 / 255, green: 85 / 255, blue: 95 / 255)
-
-        case .dream17:
-            self.bgTop = Color(red: 17 / 255, green: 11 / 255, blue: 31 / 255)
-            self.bgBottom = Color(red: 9 / 255, green: 6 / 255, blue: 16 / 255)
-            self.surface = Color(red: 25 / 255, green: 19 / 255, blue: 42 / 255).opacity(0.76)
-            self.surfaceMuted = Color(red: 42 / 255, green: 31 / 255, blue: 68 / 255).opacity(0.60)
-            self.border = Color(red: 218 / 255, green: 200 / 255, blue: 255 / 255).opacity(0.14)
-            self.strongBorder = Color(red: 255 / 255, green: 164 / 255, blue: 232 / 255).opacity(0.45)
-            self.textPrimary = Color(red: 246 / 255, green: 242 / 255, blue: 255 / 255)
-            self.textSecondary = Color(red: 180 / 255, green: 169 / 255, blue: 212 / 255)
-            self.textMuted = Color(red: 119 / 255, green: 108 / 255, blue: 152 / 255)
-            self.accent = Color(red: 255 / 255, green: 156 / 255, blue: 227 / 255)
-            self.accentSoft = Color(red: 255 / 255, green: 156 / 255, blue: 227 / 255).opacity(0.18)
-            self.accentText = Color(red: 255 / 255, green: 214 / 255, blue: 244 / 255)
-            self.pillBg = Color(red: 246 / 255, green: 242 / 255, blue: 255 / 255)
-            self.pillText = Color(red: 19 / 255, green: 11 / 255, blue: 34 / 255)
-            self.miniBg = Color(red: 22 / 255, green: 16 / 255, blue: 36 / 255).opacity(0.90)
-            self.bannerText = Color(red: 246 / 255, green: 242 / 255, blue: 255 / 255)
-            self.bannerMuted = Color(red: 198 / 255, green: 186 / 255, blue: 225 / 255)
-
-        case .appleRetro:
-            self.bgTop = Color(red: 238 / 255, green: 238 / 255, blue: 234 / 255)
-            self.bgBottom = Color(red: 225 / 255, green: 225 / 255, blue: 220 / 255)
-            self.surface = Color(red: 246 / 255, green: 246 / 255, blue: 242 / 255)
-            self.surfaceMuted = Color(red: 217 / 255, green: 217 / 255, blue: 210 / 255)
-            self.border = Color.black.opacity(0.11)
-            self.strongBorder = Color.black.opacity(0.28)
-            self.textPrimary = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
-            self.textSecondary = Color(red: 92 / 255, green: 92 / 255, blue: 96 / 255)
-            self.textMuted = Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255)
-            self.accent = Color(red: 44 / 255, green: 107 / 255, blue: 224 / 255)
-            self.accentSoft = Color(red: 44 / 255, green: 107 / 255, blue: 224 / 255).opacity(0.14)
-            self.accentText = Color(red: 23 / 255, green: 70 / 255, blue: 158 / 255)
-            self.pillBg = Color(red: 44 / 255, green: 107 / 255, blue: 224 / 255)
-            self.pillText = .white
-            self.miniBg = Color(red: 242 / 255, green: 242 / 255, blue: 238 / 255).opacity(0.96)
-            self.bannerText = Color(red: 244 / 255, green: 246 / 255, blue: 248 / 255)
-            self.bannerMuted = Color(red: 185 / 255, green: 194 / 255, blue: 206 / 255)
+        case .airpodsProBlack:
+            // Minimalist Apple Obsidian / Titanium palette matching PC version
+            self.isDark = true
+            self.bgTop = Color(red: 10 / 255, green: 10 / 255, blue: 12 / 255)
+            self.bgBottom = Color(red: 16 / 255, green: 16 / 255, blue: 19 / 255)
+            self.surface = Color(red: 24 / 255, green: 24 / 255, blue: 29 / 255)
+            self.surfaceMuted = Color(red: 32 / 255, green: 32 / 255, blue: 39 / 255)
+            self.surfaceActive = Color(red: 36 / 255, green: 36 / 255, blue: 44 / 255)
+            self.border = Color(red: 38 / 255, green: 38 / 255, blue: 46 / 255)
+            self.strongBorder = Color(red: 58 / 255, green: 58 / 255, blue: 68 / 255)
+            self.textPrimary = Color(red: 242 / 255, green: 242 / 255, blue: 243 / 255)
+            self.textSecondary = Color(red: 142 / 255, green: 142 / 255, blue: 152 / 255)
+            self.textMuted = Color(red: 90 / 255, green: 90 / 255, blue: 100 / 255)
+            self.accent = Color(red: 229 / 255, green: 229 / 255, blue: 234 / 255)
+            self.accentSoft = Color(red: 44 / 255, green: 44 / 255, blue: 54 / 255)
+            self.accentText = Color(red: 242 / 255, green: 242 / 255, blue: 243 / 255)
+            self.pillBg = Color(red: 242 / 255, green: 242 / 255, blue: 243 / 255)
+            self.pillText = Color(red: 10 / 255, green: 10 / 255, blue: 12 / 255)
+            self.miniBg = Color(red: 19 / 255, green: 19 / 255, blue: 23 / 255).opacity(0.95)
         }
-    }
-
-    var rowRadius: CGFloat {
-        kind == .eveSketch ? 8 : 12
-    }
-
-    var cardRadius: CGFloat {
-        kind == .eveSketch ? 9 : 16
     }
 }
 
-// MARK: - Ambient Collage Backdrop
+// MARK: - Ambient Backdrop
 
 private struct AppBackdropView: View {
     let palette: ThemePalette
@@ -247,8 +108,7 @@ private struct AppBackdropView: View {
                 endPoint: .bottom
             )
 
-            switch palette.kind {
-            case .skyShards:
+            if palette.kind == .skyShards {
                 RadialGradient(
                     colors: [Color(red: 133 / 255, green: 192 / 255, blue: 238 / 255).opacity(0.45), .clear],
                     center: .topLeading,
@@ -256,44 +116,18 @@ private struct AppBackdropView: View {
                     endRadius: 320
                 )
                 RadialGradient(
-                    colors: [Color(red: 164 / 255, green: 214 / 255, blue: 160 / 255).opacity(0.20), .clear],
+                    colors: [Color(red: 164 / 255, green: 214 / 255, blue: 160 / 255).opacity(0.18), .clear],
                     center: .bottomTrailing,
                     startRadius: 10,
                     endRadius: 280
                 )
-            case .eveSketch:
-                Canvas { ctx, size in
-                    let step: CGFloat = 24
-                    var path = Path()
-                    var x: CGFloat = 0
-                    while x <= size.width {
-                        path.move(to: CGPoint(x: x, y: 0))
-                        path.addLine(to: CGPoint(x: x, y: size.height))
-                        x += step
-                    }
-                    var y: CGFloat = 0
-                    while y <= size.height {
-                        path.move(to: CGPoint(x: 0, y: y))
-                        path.addLine(to: CGPoint(x: size.width, y: y))
-                        y += step
-                    }
-                    ctx.stroke(path, with: .color(Color.black.opacity(0.035)), lineWidth: 0.75)
-                }
-            case .dream17:
+            } else {
                 RadialGradient(
-                    colors: [Color(red: 255 / 255, green: 134 / 255, blue: 219 / 255).opacity(0.22), .clear],
-                    center: .topTrailing,
-                    startRadius: 10,
-                    endRadius: 300
-                )
-                RadialGradient(
-                    colors: [Color(red: 105 / 255, green: 221 / 255, blue: 255 / 255).opacity(0.16), .clear],
-                    center: .bottomLeading,
+                    colors: [Color.white.opacity(0.045), .clear],
+                    center: .top,
                     startRadius: 10,
                     endRadius: 320
                 )
-            case .appleRetro:
-                EmptyView()
             }
         }
         .ignoresSafeArea()
@@ -312,22 +146,18 @@ private struct SkyShardShape: Shape {
     }
 }
 
-// MARK: - Main Screen (Matches Preset: sky-shards | banner: art2 | rows: covers | mini: floating | tools: hidden)
+// MARK: - Main Screen
 
 struct ContentView: View {
     @EnvironmentObject var vkClient: VKAPIClient
     @EnvironmentObject var player: AudioPlayerManager
 
     @AppStorage("ui_theme") private var rawTheme: String = AppThemeKind.skyShards.rawValue
-    @AppStorage("ui_banner") private var rawBanner: String = BannerArtKind.art2.rawValue
-    @AppStorage("ui_row_style") private var rawRowStyle: String = RowDisplayStyle.covers.rawValue
-    @AppStorage("ui_mini_style") private var rawMiniStyle: String = MiniPlayerStyle.floating.rawValue
-    @AppStorage("ui_show_tools") private var showToolsStrip: Bool = false
 
     @State private var searchText: String = ""
     @State private var browsingPlaylists: Bool = false
+    @State private var activeOfflineGroup: VKOfflinePlaylist?
     @State private var showAuthSheet: Bool = false
-    @State private var showAppearanceSheet: Bool = false
     @State private var showNowPlayingSheet: Bool = false
     @State private var nowPlayingTab: NowPlayingTab = .player
 
@@ -339,27 +169,23 @@ struct ContentView: View {
         ThemePalette(themeKind)
     }
 
-    private var bannerKind: BannerArtKind {
-        BannerArtKind(rawValue: rawBanner) ?? .art2
-    }
-
-    private var rowStyle: RowDisplayStyle {
-        RowDisplayStyle(rawValue: rawRowStyle) ?? .covers
-    }
-
-    private var miniStyle: MiniPlayerStyle {
-        MiniPlayerStyle(rawValue: rawMiniStyle) ?? .floating
+    private var currentTracksSource: [VKTrack] {
+        if vkClient.currentSection == .downloaded, let group = activeOfflineGroup {
+            return group.tracks
+        }
+        return vkClient.tracks
     }
 
     private var filteredTracks: [VKTrack] {
+        let base = currentTracksSource
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return vkClient.tracks }
+        guard !q.isEmpty else { return base }
         if case .search(let searchedQ) = vkClient.currentSection,
            q == searchedQ.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            return vkClient.tracks
+            return base
         }
         let words = q.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        return vkClient.tracks.filter { track in
+        return base.filter { track in
             let titleLow = track.title.lowercased()
             let artistLow = track.artist.lowercased()
             let albumLow = track.albumTitle.lowercased()
@@ -369,6 +195,10 @@ struct ContentView: View {
         }
     }
 
+    private var hasActiveTrack: Bool {
+        player.currentTrack != nil
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             AppBackdropView(palette: palette)
@@ -376,22 +206,27 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 headerArea
                 sectionTabsStrip
-                if showToolsStrip {
-                    optionalToolsStrip
-                }
                 mainContentArea
-                if player.currentTrack != nil && miniStyle != .floating {
-                    miniPlayerView
-                }
             }
 
-            if player.currentTrack != nil && miniStyle == .floating {
-                miniPlayerView
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
+            if hasActiveTrack {
+                MiniPlayerBar(
+                    player: player,
+                    palette: palette,
+                    onTapBar: {
+                        nowPlayingTab = .player
+                        showNowPlayingSheet = true
+                    },
+                    onTapQueue: {
+                        nowPlayingTab = .queue
+                        showNowPlayingSheet = true
+                    }
+                )
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
             }
         }
-        .preferredColorScheme(palette.kind.colorScheme)
+        .preferredColorScheme(themeKind.colorScheme)
         .sheet(isPresented: $showAuthSheet) {
             VKWebAuthSheet()
         }
@@ -399,23 +234,14 @@ struct ContentView: View {
             NowPlayingSheet(
                 selectedTab: $nowPlayingTab,
                 palette: palette,
-                onOpenAppearance: {
-                    showNowPlayingSheet = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        showAppearanceSheet = true
-                    }
-                }
+                onToggleTheme: toggleTheme
             )
         }
-        .sheet(isPresented: $showAppearanceSheet) {
-            AppearanceSheet(
-                rawTheme: $rawTheme,
-                rawBanner: $rawBanner,
-                rawRowStyle: $rawRowStyle,
-                rawMiniStyle: $rawMiniStyle,
-                showToolsStrip: $showToolsStrip,
-                palette: palette
-            )
+    }
+
+    private func toggleTheme() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            rawTheme = themeKind.toggled.rawValue
         }
     }
 
@@ -423,145 +249,143 @@ struct ContentView: View {
 
     private var headerArea: some View {
         VStack(spacing: 8) {
-            if let asset = bannerKind.assetName {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("VK Music")
-                            .font(.system(size: 17, weight: .heavy))
-                            .tracking(-0.3)
-                            .foregroundColor(palette.bannerText)
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("VK Music")
+                        .font(.system(size: 17, weight: .heavy))
+                        .tracking(-0.3)
+                        .foregroundColor(palette.textPrimary)
 
-                        Text(headerSubtitle)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(palette.bannerMuted)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 4)
-
-                    headerActionButtons(onDarkBanner: themeKind == .dream17 || themeKind == .appleRetro)
+                    Text(headerSubtitle)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 60)
-                .background(
-                    GeometryReader { geo in
-                        ZStack(alignment: .trailing) {
-                            bannerSurfaceBackground
 
-                            Image(asset)
+                Spacer(minLength: 4)
+
+                headerActionButtons
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 60)
+            .background(
+                GeometryReader { geo in
+                    ZStack(alignment: .trailing) {
+                        palette.surface
+
+                        if themeKind == .skyShards {
+                            Image("Art2Sky")
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: geo.size.width, height: geo.size.height)
-                                .opacity(bannerImageOpacity)
-                                .grayscale(themeKind == .eveSketch ? 1.0 : 0.0)
+                                .opacity(0.36)
 
                             LinearGradient(
-                                colors: [
-                                    bannerWashColor.opacity(themeKind == .dream17 || themeKind == .appleRetro ? 0.85 : 0.72),
-                                    bannerWashColor.opacity(0.28)
-                                ],
+                                colors: [palette.surface.opacity(0.74), palette.surface.opacity(0.28)],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
 
-                            if themeKind == .skyShards {
-                                SkyShardShape()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [Color.white.opacity(0.55), Color(red: 140 / 255, green: 200 / 255, blue: 245 / 255).opacity(0.22)],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
+                            SkyShardShape()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color.white.opacity(0.55), Color(red: 140 / 255, green: 200 / 255, blue: 245 / 255).opacity(0.22)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
                                     )
-                                    .frame(width: 112, height: 108)
-                                    .offset(x: 16, y: -12)
-                            }
+                                )
+                                .frame(width: 112, height: 108)
+                                .offset(x: 16, y: -12)
+                        } else {
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 28 / 255, green: 28 / 255, blue: 34 / 255).opacity(0.65),
+                                    Color(red: 16 / 255, green: 16 / 255, blue: 20 / 255).opacity(0.95)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         }
                     }
-                )
-                .clipShape(RoundedRectangle(cornerRadius: palette.cardRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: palette.cardRadius)
-                        .stroke(themeKind == .eveSketch ? palette.strongBorder : palette.border, lineWidth: 1)
-                )
-            } else {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("VK Music")
-                            .font(.system(size: 20, weight: .heavy))
-                            .tracking(-0.4)
-                            .foregroundColor(palette.textPrimary)
-                        Text(headerSubtitle)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(palette.textMuted)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 4)
-                    headerActionButtons(onDarkBanner: themeKind == .dream17)
                 }
-                .padding(.horizontal, 2)
-                .padding(.top, 2)
-            }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(palette.border, lineWidth: 1)
+            )
 
+            // Search bar
             HStack(spacing: 7) {
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(palette.textMuted)
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(palette.textMuted)
 
-                    TextField("Поиск треков и артистов...", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13.5))
-                        .foregroundColor(palette.textPrimary)
-                        .submitLabel(.search)
-                        .onSubmit {
-                            submitSearchOrReload()
-                        }
-
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 14))
-                                .foregroundColor(palette.textMuted)
-                        }
-                        .buttonStyle(.plain)
+                TextField("Поиск треков и артистов...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13.5))
+                    .foregroundColor(palette.textPrimary)
+                    .submitLabel(.search)
+                    .onSubmit {
+                        submitSearchOrReload()
                     }
 
+                if !searchText.isEmpty {
                     Button {
-                        submitSearchOrReload()
+                        searchText = ""
                     } label: {
-                        Image(systemName: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "arrow.clockwise" : "arrow.right")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(palette.accentText)
-                            .frame(width: 24, height: 24)
-                            .background(palette.accentSoft)
-                            .clipShape(Circle())
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(palette.textMuted)
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .background(palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: palette.rowRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: palette.rowRadius)
-                        .stroke(themeKind == .eveSketch ? palette.strongBorder : palette.border, lineWidth: 1)
-                )
+
+                Button {
+                    submitSearchOrReload()
+                } label: {
+                    Image(systemName: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "arrow.clockwise" : "arrow.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(palette.accentText)
+                        .frame(width: 24, height: 24)
+                        .background(palette.accentSoft)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .background(palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(palette.border, lineWidth: 1)
+            )
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
     }
 
-    private func headerActionButtons(onDarkBanner: Bool) -> some View {
-        let chipBg = onDarkBanner ? Color.white.opacity(0.14) : Color.white.opacity(0.62)
-        let chipStroke = onDarkBanner ? Color.white.opacity(0.24) : palette.border
-        let textCol = onDarkBanner ? Color.white : palette.textPrimary
+    private var headerActionButtons: some View {
+        let chipBg = palette.isDark ? palette.surfaceMuted : Color.white.opacity(0.65)
+        let chipStroke = palette.border
 
         return HStack(spacing: 5) {
+            Button {
+                nowPlayingTab = .queue
+                showNowPlayingSheet = true
+            } label: {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundColor(palette.textPrimary)
+                    .frame(width: 28, height: 27)
+                    .background(chipBg)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(chipStroke, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+
             Button {
                 nowPlayingTab = .equalizer
                 showNowPlayingSheet = true
@@ -572,26 +396,23 @@ struct ContentView: View {
                     Text("EQ")
                         .font(.system(size: 11, weight: .bold))
                 }
-                .foregroundColor(player.eqEnabled ? (onDarkBanner ? palette.accent : palette.accentText) : textCol)
+                .foregroundColor(player.eqEnabled ? palette.accentText : palette.textPrimary)
                 .padding(.horizontal, 8)
                 .frame(height: 27)
                 .background(player.eqEnabled ? palette.accentSoft : chipBg)
                 .clipShape(Capsule())
-                .overlay(Capsule().stroke(player.eqEnabled ? palette.accent.opacity(0.55) : chipStroke, lineWidth: 1))
+                .overlay(Capsule().stroke(player.eqEnabled ? palette.strongBorder : chipStroke, lineWidth: 1))
             }
             .buttonStyle(.plain)
 
-            Button {
-                showAppearanceSheet = true
-            } label: {
-                Text("✦ Вид")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(textCol)
-                    .padding(.horizontal, 8)
-                    .frame(height: 27)
+            Button(action: toggleTheme) {
+                Text("✦")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundColor(palette.textPrimary)
+                    .frame(width: 28, height: 27)
                     .background(chipBg)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(chipStroke, lineWidth: 1))
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(chipStroke, lineWidth: 1))
             }
             .buttonStyle(.plain)
 
@@ -600,53 +421,21 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(vkClient.user != nil ? Color.green : Color.orange)
+                        .fill(vkClient.user != nil ? palette.savedGreen : Color.orange)
                         .frame(width: 6, height: 6)
                     Text(vkClient.user?.name ?? "Войти")
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                 }
-                .foregroundColor(textCol)
-                .frame(maxWidth: 92)
-                .padding(.horizontal, 8)
+                .foregroundColor(palette.textPrimary)
+                .frame(maxWidth: 78)
+                .padding(.horizontal, 7)
                 .frame(height: 27)
                 .background(chipBg)
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(chipStroke, lineWidth: 1))
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    @ViewBuilder
-    private var bannerSurfaceBackground: some View {
-        if themeKind == .appleRetro {
-            LinearGradient(
-                colors: [
-                    Color(red: 39 / 255, green: 43 / 255, blue: 48 / 255),
-                    Color(red: 27 / 255, green: 30 / 255, blue: 34 / 255)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        } else {
-            palette.surface
-        }
-    }
-
-    private var bannerWashColor: Color {
-        if themeKind == .appleRetro {
-            return Color(red: 27 / 255, green: 30 / 255, blue: 34 / 255)
-        }
-        return palette.surface
-    }
-
-    private var bannerImageOpacity: Double {
-        switch themeKind {
-        case .skyShards: return 0.36
-        case .eveSketch: return 0.22
-        case .dream17: return 0.32
-        case .appleRetro: return 0.18
         }
     }
 
@@ -657,12 +446,16 @@ struct ContentView: View {
         if vkClient.isLoading {
             return vkClient.statusText
         }
-        return "\(themeKind.tag) · \(filteredTracks.count) треков"
+        if !vkClient.statusText.isEmpty && (vkClient.batchDownloading || vkClient.downloadingPlaylistId != nil) {
+            return vkClient.statusText
+        }
+        return "\(themeKind.subtitleTag) · \(filteredTracks.count) треков"
     }
 
     private func submitSearchOrReload() {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         browsingPlaylists = false
+        activeOfflineGroup = nil
         if !q.isEmpty {
             Task { await vkClient.loadSection(.search(q)) }
         } else {
@@ -677,25 +470,31 @@ struct ContentView: View {
             HStack(spacing: 6) {
                 sectionPill("Моя музыка", active: !browsingPlaylists && vkClient.currentSection == .myMusic) {
                     browsingPlaylists = false
+                    activeOfflineGroup = nil
                     Task { await vkClient.loadSection(.myMusic) }
                 }
                 sectionPill("Недавно", active: !browsingPlaylists && vkClient.currentSection == .recentlyPlayed) {
                     browsingPlaylists = false
+                    activeOfflineGroup = nil
                     Task { await vkClient.loadSection(.recentlyPlayed) }
                 }
                 sectionPill(playlistsTabTitle, active: browsingPlaylists || isPlaylistSection) {
                     browsingPlaylists = true
+                    activeOfflineGroup = nil
                 }
                 sectionPill("Рекомендации", active: !browsingPlaylists && vkClient.currentSection == .recommendations) {
                     browsingPlaylists = false
+                    activeOfflineGroup = nil
                     Task { await vkClient.loadSection(.recommendations) }
                 }
                 sectionPill("Популярное", active: !browsingPlaylists && vkClient.currentSection == .popular) {
                     browsingPlaylists = false
+                    activeOfflineGroup = nil
                     Task { await vkClient.loadSection(.popular) }
                 }
                 sectionPill("На диске", active: !browsingPlaylists && vkClient.currentSection == .downloaded) {
                     browsingPlaylists = false
+                    activeOfflineGroup = nil
                     Task { await vkClient.loadSection(.downloaded) }
                 }
             }
@@ -724,61 +523,10 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .frame(height: 30)
                 .background(active ? palette.pillBg : palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: themeKind == .eveSketch ? 6 : 15))
+                .clipShape(Capsule())
                 .overlay(
-                    RoundedRectangle(cornerRadius: themeKind == .eveSketch ? 6 : 15)
-                        .stroke(active ? Color.clear : palette.border, lineWidth: 1)
+                    Capsule().stroke(active ? Color.clear : palette.border, lineWidth: 1)
                 )
-        }
-        .buttonStyle(.plain)
-    }
-
-    // Optional Aux Strip (hidden by default to honor tools: hidden)
-
-    private var optionalToolsStrip: some View {
-        HStack(spacing: 6) {
-            toolChip("⇄ Mix", active: player.shuffle) {
-                player.toggleShuffle()
-            }
-            toolChip(repeatChipTitle, active: player.repeatMode != .none) {
-                player.cycleRepeatMode()
-            }
-            toolChip("≈ \(player.crossfadeSecs)с", active: player.crossfadeSecs > 0) {
-                player.cycleCrossfade()
-            }
-            toolChip("🎧 EQ", active: player.eqEnabled) {
-                nowPlayingTab = .equalizer
-                showNowPlayingSheet = true
-            }
-            Spacer()
-            if !filteredTracks.isEmpty {
-                toolChip(vkClient.batchDownloading ? "Качаю..." : "↓ Все", active: false) {
-                    Task { await vkClient.downloadAll(filteredTracks) }
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
-    }
-
-    private var repeatChipTitle: String {
-        switch player.repeatMode {
-        case .none: return "↻ Off"
-        case .all: return "↻ All"
-        case .one: return "↻ 1"
-        }
-    }
-
-    private func toolChip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(active ? palette.accentText : palette.textSecondary)
-                .padding(.horizontal, 9)
-                .frame(height: 26)
-                .background(active ? palette.accentSoft : palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(active ? palette.accent.opacity(0.5) : palette.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -795,8 +543,11 @@ struct ContentView: View {
     }
 
     private var playlistsListView: some View {
-        Group {
-            if vkClient.playlists.isEmpty {
+        let offlineGroupsById = Dictionary(uniqueKeysWithValues: vkClient.offlinePlaylistGroups.map { ($0.id, $0) })
+        let virtualAlbums = vkClient.offlinePlaylistGroups.filter { $0.playlist.id < 0 }
+
+        return Group {
+            if vkClient.playlists.isEmpty && virtualAlbums.isEmpty {
                 VStack(spacing: 12) {
                     Spacer()
                     Text(vkClient.hasSavedSession ? "Плейлисты не найдены" : "Подключите аккаунт VK")
@@ -820,57 +571,134 @@ struct ContentView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(Array(vkClient.playlists.enumerated()), id: \.element.id) { idx, pl in
-                            let artNames = ["Art1Eve", "Art2Sky", "Art4Dream", "Art3City"]
-                            let fallbackName = artNames[idx % artNames.count]
-                            Button {
-                                browsingPlaylists = false
-                                Task { await vkClient.loadSection(.playlist(pl)) }
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(fallbackName)
-                                        .resizable()
-                                        .scaledToFill()
-                                        .frame(width: 46, height: 46)
-                                        .clipShape(RoundedRectangle(cornerRadius: 9))
-                                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(palette.border, lineWidth: 1))
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(pl.title)
-                                            .font(.system(size: 14, weight: .bold))
-                                            .foregroundColor(palette.textPrimary)
-                                            .lineLimit(1)
-                                        Text("\(pl.count) треков")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(palette.textSecondary)
-                                    }
-
-                                    Spacer()
-
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(palette.textMuted)
+                        ForEach(Array(vkClient.playlists.enumerated()), id: \.element.fullId) { idx, pl in
+                            let offlineRec = offlineGroupsById[pl.fullId]
+                            let isBusy = vkClient.downloadingPlaylistId == pl.fullId
+                            playlistCardRow(
+                                playlist: pl,
+                                fallbackIndex: idx,
+                                offlineCount: offlineRec?.tracks.count ?? 0,
+                                isDownloadingPlaylist: isBusy,
+                                onOpen: {
+                                    browsingPlaylists = false
+                                    Task { await vkClient.loadSection(.playlist(pl)) }
+                                },
+                                onDownload: {
+                                    Task { await vkClient.downloadPlaylist(pl) }
                                 }
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 9)
-                                .background(palette.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: palette.rowRadius))
-                                .overlay(RoundedRectangle(cornerRadius: palette.rowRadius).stroke(palette.border, lineWidth: 1))
+                            )
+                        }
+
+                        if !virtualAlbums.isEmpty {
+                            HStack {
+                                Text("СОХРАНЁННЫЕ АЛЬБОМЫ")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(palette.textMuted)
+                                Spacer()
                             }
-                            .buttonStyle(.plain)
+                            .padding(.top, 6)
+
+                            ForEach(Array(virtualAlbums.enumerated()), id: \.element.id) { idx, group in
+                                playlistCardRow(
+                                    playlist: group.playlist,
+                                    fallbackIndex: idx + 1,
+                                    offlineCount: group.tracks.count,
+                                    isDownloadingPlaylist: false,
+                                    onOpen: {
+                                        browsingPlaylists = false
+                                        Task { await vkClient.loadSection(.playlist(group.playlist)) }
+                                    },
+                                    onDownload: nil
+                                )
+                            }
                         }
                     }
                     .padding(.horizontal, 12)
                     .padding(.top, 2)
-                    .padding(.bottom, floatingListBottomInset)
+                    .padding(.bottom, hasActiveTrack ? 86 : 16)
                 }
             }
         }
     }
 
+    private func playlistCardRow(
+        playlist: VKPlaylist,
+        fallbackIndex: Int,
+        offlineCount: Int,
+        isDownloadingPlaylist: Bool,
+        onOpen: @escaping () -> Void,
+        onDownload: (() -> Void)?
+    ) -> some View {
+        HStack(spacing: 10) {
+            PlaylistCoverView(playlist: playlist, fallbackIndex: fallbackIndex, size: 48, radius: 10, palette: palette)
+
+            VStack(alignment: .leading, spacing: 2.5) {
+                Text(playlist.title)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(palette.textPrimary)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Text("\(playlist.count) треков")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(palette.textSecondary)
+
+                    if offlineCount > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 10))
+                            Text("\(offlineCount) оффлайн")
+                                .font(.system(size: 10.5, weight: .semibold))
+                        }
+                        .foregroundColor(palette.savedGreen)
+                    }
+                }
+            }
+
+            Spacer()
+
+            if let onDownload {
+                let fullyOffline = playlist.count > 0 && offlineCount >= playlist.count
+                Button(action: onDownload) {
+                    Group {
+                        if isDownloadingPlaylist {
+                            ProgressView()
+                                .scaleEffect(0.65)
+                                .tint(palette.accent)
+                        } else if fullyOffline {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.white)
+                        } else {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 11.5, weight: .bold))
+                                .foregroundColor(palette.textSecondary)
+                        }
+                    }
+                    .frame(width: 28, height: 28)
+                    .background(fullyOffline ? palette.savedGreen : palette.surfaceMuted)
+                    .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isDownloadingPlaylist || vkClient.batchDownloading)
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(palette.textMuted)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+    }
+
     private var trackListView: some View {
         Group {
-            if vkClient.isLoading && vkClient.tracks.isEmpty {
+            if vkClient.isLoading && currentTracksSource.isEmpty {
                 VStack(spacing: 10) {
                     Spacer()
                     ProgressView()
@@ -906,8 +734,12 @@ struct ContentView: View {
                 let showAdd = vkClient.currentSection != .myMusic && vkClient.currentSection != .downloaded
 
                 ScrollView {
-                    LazyVStack(spacing: rowStyle == .cards ? 6 : 2) {
+                    LazyVStack(spacing: 3) {
                         contextualListBar(list: list)
+
+                        if vkClient.currentSection == .downloaded && activeOfflineGroup == nil && searchText.trimmingCharacters(in: .whitespaces).isEmpty && !vkClient.offlinePlaylistGroups.isEmpty {
+                            offlineGroupsHeader
+                        }
 
                         ForEach(Array(list.enumerated()), id: \.offset) { index, track in
                             let isCurrent = player.currentTrack?.fullId == track.fullId
@@ -916,20 +748,24 @@ struct ContentView: View {
                             let isAdded = vkClient.addedIds.contains(track.fullId)
 
                             TrackRowView(
-                                index: index,
                                 track: track,
                                 palette: palette,
-                                rowStyle: rowStyle,
                                 isCurrent: isCurrent,
                                 isPlaying: isCurrent && player.isPlaying,
                                 isSaved: isSaved,
                                 isDownloading: isDownloading,
                                 isAdded: isAdded,
-                                showAddButton: showAdd,
+                                showAddAction: showAdd,
                                 onTap: {
                                     player.playFromList(list, index: index)
                                 },
-                                onAdd: {
+                                onPlayNext: {
+                                    player.playNext(track)
+                                },
+                                onAddToQueue: {
+                                    player.addToQueue(track)
+                                },
+                                onAddToMyMusic: {
                                     Task { await vkClient.addAudio(track: track) }
                                 },
                                 onDownload: {
@@ -940,16 +776,83 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.top, 2)
-                    .padding(.bottom, floatingListBottomInset)
+                    .padding(.bottom, hasActiveTrack ? 86 : 16)
                 }
             }
         }
     }
 
+    private var offlineGroupsHeader: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("ПЛЕЙЛИСТЫ И АЛЬБОМЫ НА ДИСКЕ")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundColor(palette.textMuted)
+                .padding(.top, 2)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(vkClient.offlinePlaylistGroups.enumerated()), id: \.element.id) { idx, group in
+                        Button {
+                            activeOfflineGroup = group
+                        } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                PlaylistCoverView(
+                                    playlist: group.playlist,
+                                    fallbackIndex: idx,
+                                    size: 92,
+                                    radius: 10,
+                                    palette: palette
+                                )
+                                Text(group.playlist.title)
+                                    .font(.system(size: 11.5, weight: .bold))
+                                    .foregroundColor(palette.textPrimary)
+                                    .lineLimit(1)
+                                Text("\(group.tracks.count) треков")
+                                    .font(.system(size: 10.5))
+                                    .foregroundColor(palette.textSecondary)
+                            }
+                            .frame(width: 96, alignment: .leading)
+                            .padding(6)
+                            .background(palette.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            Text("ВСЕ СКАЧАННЫЕ ТРЕКИ")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundColor(palette.textMuted)
+                .padding(.top, 4)
+        }
+        .padding(.bottom, 4)
+    }
+
     @ViewBuilder
     private func contextualListBar(list: [VKTrack]) -> some View {
-        HStack(spacing: 8) {
-            if isPlaylistSection {
+        HStack(spacing: 7) {
+            if vkClient.currentSection == .downloaded, let group = activeOfflineGroup {
+                Button {
+                    activeOfflineGroup = nil
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10.5, weight: .bold))
+                        Text(group.playlist.title)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(palette.accentText)
+                    .padding(.horizontal, 9)
+                    .frame(height: 26)
+                    .background(palette.accentSoft)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            } else if isPlaylistSection {
                 Button {
                     browsingPlaylists = true
                 } label: {
@@ -1011,37 +914,40 @@ struct ContentView: View {
                         .foregroundColor(.red)
                         .padding(.horizontal, 9)
                         .frame(height: 26)
-                        .background(Color.red.opacity(0.10))
+                        .background(Color.red.opacity(0.12))
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
 
-            Button {
-                Task { await vkClient.downloadAll(list) }
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: vkClient.batchDownloading ? "ellipsis" : "arrow.down.circle")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(vkClient.batchDownloading ? "Качаю..." : "Скачать")
-                        .font(.system(size: 11, weight: .semibold))
+            if vkClient.currentSection != .downloaded {
+                Button {
+                    Task {
+                        if case .playlist(let pl) = vkClient.currentSection {
+                            await vkClient.downloadPlaylist(pl)
+                        } else {
+                            await vkClient.downloadAll(list)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: vkClient.batchDownloading ? "ellipsis" : "arrow.down.circle")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(vkClient.batchDownloading ? "Качаю..." : "Скачать")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundColor(palette.textSecondary)
+                    .padding(.horizontal, 9)
+                    .frame(height: 26)
+                    .background(palette.surface)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(palette.border, lineWidth: 1))
                 }
-                .foregroundColor(palette.textSecondary)
-                .padding(.horizontal, 9)
-                .frame(height: 26)
-                .background(palette.surface)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(palette.border, lineWidth: 1))
+                .buttonStyle(.plain)
+                .disabled(vkClient.batchDownloading)
             }
-            .buttonStyle(.plain)
-            .disabled(vkClient.batchDownloading)
         }
         .padding(.bottom, 6)
-    }
-
-    private var floatingListBottomInset: CGFloat {
-        guard player.currentTrack != nil else { return 16 }
-        return miniStyle == .floating ? 84 : 12
     }
 
     private var emptyMessage: String {
@@ -1050,13 +956,18 @@ struct ContentView: View {
         }
         return vkClient.hasSavedSession ? "Ничего не найдено" : "Подключите аккаунт VK"
     }
+}
 
-    // MARK: - Floating / Docked / Inline Mini-Player
+// MARK: - Isolated Floating Mini-Player (Zero Tracklist Re-renders on Time Tick)
 
-    @ViewBuilder
-    private var miniPlayerView: some View {
+private struct MiniPlayerBar: View {
+    @ObservedObject var player: AudioPlayerManager
+    let palette: ThemePalette
+    let onTapBar: () -> Void
+    let onTapQueue: () -> Void
+
+    var body: some View {
         if let track = player.currentTrack {
-            let corner: CGFloat = miniStyle == .docked ? 0 : palette.cardRadius
             let elapsedText = "\(formatTime(player.currentTime)) / \(formatTime(player.duration))"
 
             VStack(spacing: 0) {
@@ -1073,7 +984,7 @@ struct ContentView: View {
                 .frame(height: 2.5)
 
                 HStack(spacing: 9) {
-                    ArtworkView(track: track, size: 38, radius: 8, palette: palette)
+                    TrackCoverView(track: track, size: 38, radius: 8, palette: palette)
 
                     VStack(alignment: .leading, spacing: 1.5) {
                         Text(track.title)
@@ -1099,14 +1010,25 @@ struct ContentView: View {
 
                     Spacer(minLength: 4)
 
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
+                        Button(action: onTapQueue) {
+                            Image(systemName: "list.bullet")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(palette.textSecondary)
+                                .frame(width: 27, height: 27)
+                                .background(palette.surfaceMuted)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(palette.border, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+
                         Button {
                             player.previousTrack()
                         } label: {
                             Image(systemName: "backward.end.fill")
-                                .font(.system(size: 11.5))
+                                .font(.system(size: 11))
                                 .foregroundColor(palette.textPrimary)
-                                .frame(width: 28, height: 28)
+                                .frame(width: 27, height: 27)
                                 .background(palette.surfaceMuted)
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(palette.border, lineWidth: 1))
@@ -1119,15 +1041,15 @@ struct ContentView: View {
                             Group {
                                 if player.isBuffering {
                                     ProgressView()
-                                        .scaleEffect(0.62)
+                                        .scaleEffect(0.6)
                                         .tint(palette.pillText)
                                 } else {
                                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.system(size: 12.5))
+                                        .font(.system(size: 12))
                                         .foregroundColor(palette.pillText)
                                 }
                             }
-                            .frame(width: 33, height: 33)
+                            .frame(width: 32, height: 32)
                             .background(palette.pillBg)
                             .clipShape(Circle())
                         }
@@ -1137,9 +1059,9 @@ struct ContentView: View {
                             player.nextTrack(manual: true)
                         } label: {
                             Image(systemName: "forward.end.fill")
-                                .font(.system(size: 11.5))
+                                .font(.system(size: 11))
                                 .foregroundColor(palette.textPrimary)
-                                .frame(width: 28, height: 28)
+                                .frame(width: 27, height: 27)
                                 .background(palette.surfaceMuted)
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(palette.border, lineWidth: 1))
@@ -1151,25 +1073,19 @@ struct ContentView: View {
                 .padding(.vertical, 8)
             }
             .background(palette.miniBg)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: corner))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay(
-                RoundedRectangle(cornerRadius: corner)
-                    .stroke(themeKind == .eveSketch ? palette.strongBorder : palette.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(palette.border, lineWidth: 1)
             )
             .shadow(
-                color: Color.black.opacity(miniStyle == .floating ? 0.14 : 0.05),
-                radius: miniStyle == .floating ? 16 : 6,
+                color: Color.black.opacity(palette.isDark ? 0.45 : 0.14),
+                radius: 16,
                 x: 0,
-                y: miniStyle == .floating ? 8 : -2
+                y: 8
             )
-            .padding(.horizontal, miniStyle == .inline ? 12 : 0)
-            .padding(.bottom, miniStyle == .inline ? 10 : 0)
             .contentShape(Rectangle())
-            .onTapGesture {
-                nowPlayingTab = .player
-                showNowPlayingSheet = true
-            }
+            .onTapGesture(perform: onTapBar)
         }
     }
 
@@ -1179,45 +1095,38 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Track Row (Covers / Compact / Cards)
+// MARK: - Track Row (Real Album Covers Only, Zero Fake Art)
 
 private struct TrackRowView: View {
-    let index: Int
     let track: VKTrack
     let palette: ThemePalette
-    let rowStyle: RowDisplayStyle
     let isCurrent: Bool
     let isPlaying: Bool
     let isSaved: Bool
     let isDownloading: Bool
     let isAdded: Bool
-    let showAddButton: Bool
+    let showAddAction: Bool
     let onTap: () -> Void
-    let onAdd: () -> Void
+    let onPlayNext: () -> Void
+    let onAddToQueue: () -> Void
+    let onAddToMyMusic: () -> Void
     let onDownload: () -> Void
 
     var body: some View {
-        HStack(spacing: rowStyle == .compact ? 8 : 10) {
-            if rowStyle != .compact {
-                ZStack {
-                    ArtworkView(track: track, size: 40, radius: 8, palette: palette)
-                    if isCurrent {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.black.opacity(0.36))
-                            .frame(width: 40, height: 40)
-                        HStack(spacing: 2) {
-                            Capsule().frame(width: 2.5, height: isPlaying ? 8 : 4)
-                            Capsule().frame(width: 2.5, height: isPlaying ? 14 : 4)
-                            Capsule().frame(width: 2.5, height: isPlaying ? 10 : 4)
-                        }
-                        .foregroundColor(.white)
+        HStack(spacing: 10) {
+            ZStack {
+                TrackCoverView(track: track, size: 40, radius: 8, palette: palette)
+                if isCurrent {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.black.opacity(0.42))
+                        .frame(width: 40, height: 40)
+                    HStack(spacing: 2) {
+                        Capsule().frame(width: 2.5, height: isPlaying ? 8 : 4)
+                        Capsule().frame(width: 2.5, height: isPlaying ? 14 : 4)
+                        Capsule().frame(width: 2.5, height: isPlaying ? 10 : 4)
                     }
+                    .foregroundColor(.white)
                 }
-            } else {
-                Text(isCurrent ? (isPlaying ? "ılı" : "▶") : String(format: "%d", index + 1))
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(isCurrent ? palette.accentText : palette.textMuted)
-                    .frame(width: 22)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -1229,7 +1138,7 @@ private struct TrackRowView: View {
                 HStack(spacing: 4) {
                     if isSaved {
                         Circle()
-                            .fill(Color.green)
+                            .fill(palette.savedGreen)
                             .frame(width: 6, height: 6)
                     }
                     Text(track.albumTitle.isEmpty ? track.artist : "\(track.artist) · \(track.albumTitle)")
@@ -1240,19 +1149,6 @@ private struct TrackRowView: View {
             }
 
             Spacer(minLength: 4)
-
-            if showAddButton {
-                Button(action: onAdd) {
-                    Image(systemName: isAdded ? "checkmark" : "plus")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(isAdded ? .white : palette.textSecondary)
-                        .frame(width: 26, height: 26)
-                        .background(isAdded ? Color.green : palette.surfaceMuted)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isAdded)
-            }
 
             Button(action: onDownload) {
                 Group {
@@ -1271,8 +1167,31 @@ private struct TrackRowView: View {
                     }
                 }
                 .frame(width: 26, height: 26)
-                .background(isSaved ? Color.green : palette.surfaceMuted)
+                .background(isSaved ? palette.savedGreen : palette.surfaceMuted)
                 .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                Button(action: onPlayNext) {
+                    Label("Играть следующим", systemImage: "text.insert")
+                }
+                Button(action: onAddToQueue) {
+                    Label("Добавить в конец очереди", systemImage: "text.append")
+                }
+                if showAddAction && !isAdded {
+                    Button(action: onAddToMyMusic) {
+                        Label("Добавить в Мою музыку", systemImage: "plus")
+                    }
+                }
+                Button(action: onDownload) {
+                    Label(isSaved ? "Уже на диске" : "Скачать на устройство", systemImage: isSaved ? "checkmark.circle" : "arrow.down.circle")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(palette.textMuted)
+                    .frame(width: 22, height: 26)
             }
             .buttonStyle(.plain)
 
@@ -1281,50 +1200,67 @@ private struct TrackRowView: View {
                 .foregroundColor(palette.textMuted)
                 .frame(width: 34, alignment: .trailing)
         }
-        .padding(.horizontal, rowStyle == .cards ? 10 : 8)
-        .padding(.vertical, rowStyle == .compact ? 6 : 7)
-        .background(rowBackground)
-        .clipShape(RoundedRectangle(cornerRadius: palette.rowRadius))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(isCurrent ? palette.surfaceActive : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
-            RoundedRectangle(cornerRadius: palette.rowRadius)
-                .stroke(rowBorderColor, lineWidth: isCurrent || rowStyle == .cards ? 1 : 0)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isCurrent ? palette.strongBorder : Color.clear, lineWidth: isCurrent ? 1 : 0)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-    }
-
-    private var rowBackground: Color {
-        if isCurrent { return palette.accentSoft }
-        return rowStyle == .cards ? palette.surface : .clear
-    }
-
-    private var rowBorderColor: Color {
-        if isCurrent { return palette.accent.opacity(0.45) }
-        return rowStyle == .cards ? palette.border : .clear
+        .contextMenu {
+            Button(action: onPlayNext) {
+                Label("Играть следующим", systemImage: "text.insert")
+            }
+            Button(action: onAddToQueue) {
+                Label("В конец очереди", systemImage: "text.append")
+            }
+            if showAddAction && !isAdded {
+                Button(action: onAddToMyMusic) {
+                    Label("В Мою музыку", systemImage: "plus")
+                }
+            }
+            Button(action: onDownload) {
+                Label(isSaved ? "Сохранено" : "Скачать", systemImage: "arrow.down.circle")
+            }
+        }
     }
 }
 
-// MARK: - Artwork View (VK Cover + Bundled Sqwore Fallback)
+// MARK: - Cached Cover Views
 
-private struct ArtworkView: View {
+private struct TrackCoverView: View {
     let track: VKTrack
     let size: CGFloat
     let radius: CGFloat
     let palette: ThemePalette
 
+    @State private var loadedImage: UIImage?
+    @State private var loadedKey: String = ""
+
+    private var activeImage: UIImage? {
+        guard !track.coverUrl.isEmpty else { return nil }
+        if let hit = CoverImageCache.shared.cachedImage(for: track.coverUrl) {
+            return hit
+        }
+        return loadedKey == track.coverUrl ? loadedImage : nil
+    }
+
     var body: some View {
         Group {
-            if let url = URL(string: track.coverUrl), !track.coverUrl.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        fallbackArt
-                    }
-                }
+            if let img = activeImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
             } else {
-                fallbackArt
+                ZStack {
+                    palette.surfaceMuted
+                    Image(systemName: "music.note")
+                        .font(.system(size: size * 0.34, weight: .semibold))
+                        .foregroundColor(palette.textMuted)
+                }
             }
         }
         .frame(width: size, height: size)
@@ -1333,180 +1269,86 @@ private struct ArtworkView: View {
             RoundedRectangle(cornerRadius: radius)
                 .stroke(palette.border, lineWidth: 1)
         )
-    }
-
-    private var fallbackArt: some View {
-        Image(BannerArtKind.fallbackAsset(for: track))
-            .resizable()
-            .scaledToFill()
+        .task(id: track.coverUrl) {
+            let key = track.coverUrl
+            guard !key.isEmpty else {
+                loadedKey = ""
+                loadedImage = nil
+                return
+            }
+            if let mem = CoverImageCache.shared.cachedImage(for: key) {
+                loadedKey = key
+                loadedImage = mem
+                return
+            }
+            let fetched = await CoverImageCache.shared.image(for: key)
+            loadedKey = key
+            loadedImage = fetched
+        }
     }
 }
 
-// MARK: - Appearance Picker Sheet
-
-private struct AppearanceSheet: View {
-    @Binding var rawTheme: String
-    @Binding var rawBanner: String
-    @Binding var rawRowStyle: String
-    @Binding var rawMiniStyle: String
-    @Binding var showToolsStrip: Bool
+private struct PlaylistCoverView: View {
+    let playlist: VKPlaylist
+    let fallbackIndex: Int
+    let size: CGFloat
+    let radius: CGFloat
     let palette: ThemePalette
-    @Environment(\.dismiss) private var dismiss
+
+    @State private var loadedImage: UIImage?
+    @State private var loadedKey: String = ""
+
+    private var fallbackAssetName: String {
+        let names = ["Art1Eve", "Art2Sky", "Art4Dream", "Art3City"]
+        return names[abs(fallbackIndex) % names.count]
+    }
+
+    private var activeImage: UIImage? {
+        guard !playlist.coverUrl.isEmpty else { return nil }
+        if let hit = CoverImageCache.shared.cachedImage(for: playlist.coverUrl) {
+            return hit
+        }
+        return loadedKey == playlist.coverUrl ? loadedImage : nil
+    }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                AppBackdropView(palette: palette)
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("КОНЦЕПТ ОФОРМЛЕНИЯ")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(palette.textMuted)
-
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                                ForEach(AppThemeKind.allCases) { kind in
-                                    let active = rawTheme == kind.rawValue
-                                    Button {
-                                        rawTheme = kind.rawValue
-                                        rawBanner = kind.defaultBanner.rawValue
-                                    } label: {
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(kind.title)
-                                                .font(.system(size: 13, weight: .bold))
-                                                .foregroundColor(palette.textPrimary)
-                                            Text(kind.subtitle)
-                                                .font(.system(size: 11))
-                                                .foregroundColor(palette.textSecondary)
-                                                .lineLimit(2)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(10)
-                                        .background(active ? palette.accentSoft : palette.surface)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(active ? palette.accent : palette.border, lineWidth: active ? 1.5 : 1)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("АРТ В ШАПКЕ")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(palette.textMuted)
-
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 7) {
-                                    ForEach(BannerArtKind.allCases) { art in
-                                        let active = rawBanner == art.rawValue
-                                        Button {
-                                            rawBanner = art.rawValue
-                                        } label: {
-                                            HStack(spacing: 6) {
-                                                if let asset = art.assetName {
-                                                    Image(asset)
-                                                        .resizable()
-                                                        .scaledToFill()
-                                                        .frame(width: 20, height: 20)
-                                                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                                                }
-                                                Text(art.title)
-                                                    .font(.system(size: 12, weight: .semibold))
-                                            }
-                                            .foregroundColor(active ? palette.pillText : palette.textPrimary)
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 7)
-                                            .background(active ? palette.pillBg : palette.surface)
-                                            .clipShape(Capsule())
-                                            .overlay(Capsule().stroke(active ? Color.clear : palette.border, lineWidth: 1))
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("СТРОКИ СПИСКА")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(palette.textMuted)
-                            HStack(spacing: 6) {
-                                ForEach(RowDisplayStyle.allCases) { rs in
-                                    let active = rawRowStyle == rs.rawValue
-                                    Button {
-                                        rawRowStyle = rs.rawValue
-                                    } label: {
-                                        Text(rs.title)
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .foregroundColor(active ? palette.pillText : palette.textPrimary)
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 8)
-                                            .background(active ? palette.pillBg : palette.surface)
-                                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(active ? Color.clear : palette.border, lineWidth: 1))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("МИНИ-ПЛЕЕР И ПАНЕЛЬ")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(palette.textMuted)
-                            HStack(spacing: 6) {
-                                ForEach(MiniPlayerStyle.allCases) { ms in
-                                    let active = rawMiniStyle == ms.rawValue
-                                    Button {
-                                        rawMiniStyle = ms.rawValue
-                                    } label: {
-                                        Text(ms.title)
-                                            .font(.system(size: 11.5, weight: .semibold))
-                                            .foregroundColor(active ? palette.pillText : palette.textPrimary)
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 8)
-                                            .background(active ? palette.pillBg : palette.surface)
-                                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(active ? Color.clear : palette.border, lineWidth: 1))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-
-                            Toggle(isOn: $showToolsStrip) {
-                                Text("Показывать полоску Mix / Rpt / Xfade сверху")
-                                    .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundColor(palette.textPrimary)
-                            }
-                            .tint(palette.accent)
-                            .padding(10)
-                            .background(palette.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 1))
-                        }
-                    }
-                    .padding(14)
-                }
-            }
-            .navigationTitle("Внешний вид")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Готово") { dismiss() }
-                }
+        Group {
+            if let img = activeImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(fallbackAssetName)
+                    .resizable()
+                    .scaledToFill()
             }
         }
-        .presentationDetents([.medium, .large])
-        .preferredColorScheme(palette.kind.colorScheme)
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: radius))
+        .overlay(
+            RoundedRectangle(cornerRadius: radius)
+                .stroke(palette.border, lineWidth: 1)
+        )
+        .task(id: playlist.coverUrl) {
+            let key = playlist.coverUrl
+            guard !key.isEmpty else {
+                loadedKey = ""
+                loadedImage = nil
+                return
+            }
+            if let mem = CoverImageCache.shared.cachedImage(for: key) {
+                loadedKey = key
+                loadedImage = mem
+                return
+            }
+            let fetched = await CoverImageCache.shared.image(for: key)
+            loadedKey = key
+            loadedImage = fetched
+        }
     }
 }
 
-// MARK: - Full Player + Equalizer & AirPods 3 Sheet
+// MARK: - Full Player + Queue + Equalizer & AirPods 3 Sheet
 
 private struct NowPlayingSheet: View {
     @EnvironmentObject var vkClient: VKAPIClient
@@ -1515,7 +1357,7 @@ private struct NowPlayingSheet: View {
 
     @Binding var selectedTab: NowPlayingTab
     let palette: ThemePalette
-    let onOpenAppearance: () -> Void
+    let onToggleTheme: () -> Void
 
     @State private var isSeeking: Bool = false
     @State private var dragSeekSeconds: Double = 0
@@ -1528,9 +1370,12 @@ private struct NowPlayingSheet: View {
 
             VStack(spacing: 0) {
                 topBar
-                if selectedTab == .player {
+                switch selectedTab {
+                case .player:
                     playerBody
-                } else {
+                case .queue:
+                    queueBody
+                case .equalizer:
                     equalizerBody
                 }
             }
@@ -1539,41 +1384,37 @@ private struct NowPlayingSheet: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Button {
                 dismiss()
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .bold))
-                    Text("Список")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundColor(palette.textPrimary)
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(palette.surface)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(palette.border, lineWidth: 1))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(palette.textPrimary)
+                    .frame(width: 30, height: 30)
+                    .background(palette.surface)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(palette.border, lineWidth: 1))
             }
             .buttonStyle(.plain)
 
-            Spacer()
+            Spacer(minLength: 4)
 
-            HStack(spacing: 3) {
+            HStack(spacing: 2) {
                 tabButton("Плеер", tab: .player)
-                tabButton("🎧 EQ · AirPods 3", tab: .equalizer)
+                tabButton("Очередь", tab: .queue)
+                tabButton("🎧 EQ", tab: .equalizer)
             }
             .padding(3)
             .background(palette.surface)
             .clipShape(Capsule())
             .overlay(Capsule().stroke(palette.border, lineWidth: 1))
 
-            Spacer()
+            Spacer(minLength: 4)
 
-            Button(action: onOpenAppearance) {
+            Button(action: onToggleTheme) {
                 Text("✦")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 12.5, weight: .bold))
                     .foregroundColor(palette.textPrimary)
                     .frame(width: 30, height: 30)
                     .background(palette.surface)
@@ -1597,7 +1438,7 @@ private struct NowPlayingSheet: View {
             Text(title)
                 .font(.system(size: 11.5, weight: .bold))
                 .foregroundColor(active ? palette.pillText : palette.textSecondary)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 11)
                 .frame(height: 25)
                 .background(active ? palette.pillBg : Color.clear)
                 .clipShape(Capsule())
@@ -1618,8 +1459,8 @@ private struct NowPlayingSheet: View {
 
                     VStack(spacing: 14) {
                         ZStack(alignment: .bottomTrailing) {
-                            ArtworkView(track: track, size: 214, radius: palette.cardRadius, palette: palette)
-                                .shadow(color: Color.black.opacity(0.22), radius: 22, x: 0, y: 12)
+                            TrackCoverView(track: track, size: 214, radius: 16, palette: palette)
+                                .shadow(color: Color.black.opacity(palette.isDark ? 0.5 : 0.22), radius: 22, x: 0, y: 12)
 
                             Text("\(fmtBadge) · \(player.crossfadeSecs)с")
                                 .font(.system(size: 10, weight: .bold))
@@ -1665,6 +1506,24 @@ private struct NowPlayingSheet: View {
                             }
                             .buttonStyle(.plain)
 
+                            Button {
+                                selectedTab = .queue
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "list.bullet")
+                                        .font(.system(size: 11, weight: .semibold))
+                                    Text("\(player.queue.count)")
+                                        .font(.system(size: 11.5, weight: .bold).monospacedDigit())
+                                }
+                                .foregroundColor(palette.textPrimary)
+                                .padding(.horizontal, 10)
+                                .frame(height: 28)
+                                .background(palette.surface)
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(palette.border, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
                             let isAdded = vkClient.addedIds.contains(track.fullId)
                             Button {
                                 Task { await vkClient.addAudio(track: track) }
@@ -1673,7 +1532,7 @@ private struct NowPlayingSheet: View {
                                     .font(.system(size: 12, weight: .bold))
                                     .foregroundColor(isAdded ? .white : palette.textPrimary)
                                     .frame(width: 28, height: 28)
-                                    .background(isAdded ? Color.green : palette.surface)
+                                    .background(isAdded ? palette.savedGreen : palette.surface)
                                     .clipShape(Circle())
                                     .overlay(Circle().stroke(palette.border, lineWidth: 1))
                             }
@@ -1699,14 +1558,14 @@ private struct NowPlayingSheet: View {
                                     }
                                 }
                                 .frame(width: 28, height: 28)
-                                .background(isSaved ? Color.green : palette.surface)
+                                .background(isSaved ? palette.savedGreen : palette.surface)
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(palette.border, lineWidth: 1))
                             }
                             .buttonStyle(.plain)
                         }
 
-                        // Timeline Scrubber
+                        // Scrubber
                         VStack(spacing: 4) {
                             let maxDur = max(1.0, player.duration)
                             let shownPos = isSeeking ? dragSeekSeconds : min(player.currentTime, maxDur)
@@ -1739,7 +1598,7 @@ private struct NowPlayingSheet: View {
                         }
                         .padding(.horizontal, 16)
 
-                        // Transport Buttons
+                        // Transport
                         HStack(spacing: 14) {
                             Button {
                                 player.toggleShuffle()
@@ -1750,7 +1609,7 @@ private struct NowPlayingSheet: View {
                                     .frame(width: 36, height: 36)
                                     .background(player.shuffle ? palette.accentSoft : palette.surface)
                                     .clipShape(Circle())
-                                    .overlay(Circle().stroke(player.shuffle ? palette.accent : palette.border, lineWidth: 1))
+                                    .overlay(Circle().stroke(player.shuffle ? palette.strongBorder : palette.border, lineWidth: 1))
                             }
                             .buttonStyle(.plain)
 
@@ -1782,7 +1641,7 @@ private struct NowPlayingSheet: View {
                                 .frame(width: 60, height: 60)
                                 .background(palette.pillBg)
                                 .clipShape(Circle())
-                                .shadow(color: Color.black.opacity(0.22), radius: 12, y: 6)
+                                .shadow(color: Color.black.opacity(0.24), radius: 12, y: 6)
                             }
                             .buttonStyle(.plain)
 
@@ -1808,7 +1667,7 @@ private struct NowPlayingSheet: View {
                                     .frame(width: 36, height: 36)
                                     .background(player.repeatMode != .none ? palette.accentSoft : palette.surface)
                                     .clipShape(Circle())
-                                    .overlay(Circle().stroke(player.repeatMode != .none ? palette.accent : palette.border, lineWidth: 1))
+                                    .overlay(Circle().stroke(player.repeatMode != .none ? palette.strongBorder : palette.border, lineWidth: 1))
                             }
                             .buttonStyle(.plain)
                         }
@@ -1904,8 +1763,8 @@ private struct NowPlayingSheet: View {
                         }
                         .padding(12)
                         .background(palette.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: palette.cardRadius))
-                        .overlay(RoundedRectangle(cornerRadius: palette.cardRadius).stroke(palette.border, lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(palette.border, lineWidth: 1))
                         .padding(.horizontal, 14)
                         .padding(.bottom, 18)
                     }
@@ -1913,11 +1772,9 @@ private struct NowPlayingSheet: View {
             } else {
                 VStack(spacing: 12) {
                     Spacer()
-                    Image("Art2Sky")
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 140, height: 140)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                    Image(systemName: "waveform.circle")
+                        .font(.system(size: 56))
+                        .foregroundColor(palette.textMuted)
                     Text("Выбери трек из списка")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundColor(palette.textPrimary)
@@ -1938,18 +1795,122 @@ private struct NowPlayingSheet: View {
         }
     }
 
-    // MARK: - Equalizer & AirPods 3 Studio Tab
+    // MARK: - Live Queue Tab
+
+    private var queueBody: some View {
+        Group {
+            if player.queue.isEmpty {
+                VStack(spacing: 10) {
+                    Spacer()
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 42))
+                        .foregroundColor(palette.textMuted)
+                    Text("Очередь воспроизведения пуста")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(palette.textPrimary)
+                    Text("Нажми на любой трек или выбери «Играть следующим» в меню ⋯")
+                        .font(.system(size: 12))
+                        .foregroundColor(palette.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            let curHuman = (player.currentIndex ?? 0) + 1
+                            Text("ОЧЕРЕДЬ · \(curHuman) / \(player.queue.count)")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(palette.textMuted)
+                            Spacer()
+                            if player.shuffle {
+                                Text("⇄ Случайный порядок")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(palette.accentText)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, 4)
+
+                        ForEach(Array(player.queue.enumerated()), id: \.offset) { idx, tr in
+                            let isCur = idx == player.currentIndex
+                            HStack(spacing: 10) {
+                                ZStack {
+                                    TrackCoverView(track: tr, size: 38, radius: 7, palette: palette)
+                                    if isCur {
+                                        RoundedRectangle(cornerRadius: 7)
+                                            .fill(Color.black.opacity(0.45))
+                                            .frame(width: 38, height: 38)
+                                        Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+
+                                VStack(alignment: .leading, spacing: 1.5) {
+                                    Text(tr.title)
+                                        .font(.system(size: 13, weight: isCur ? .bold : .semibold))
+                                        .foregroundColor(isCur ? palette.accentText : palette.textPrimary)
+                                        .lineLimit(1)
+                                    Text(tr.artist)
+                                        .font(.system(size: 11.5))
+                                        .foregroundColor(palette.textSecondary)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                if !isCur {
+                                    Button {
+                                        player.removeFromQueue(at: idx)
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundColor(palette.textMuted)
+                                            .frame(width: 26, height: 26)
+                                            .background(palette.surfaceMuted)
+                                            .clipShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    Text(tr.durationText)
+                                        .font(.system(size: 11).monospacedDigit())
+                                        .foregroundColor(palette.textMuted)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(isCur ? palette.surfaceActive : palette.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 11))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 11)
+                                    .stroke(isCur ? palette.strongBorder : palette.border, lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                player.jumpToQueueIndex(idx)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 22)
+                }
+            }
+        }
+    }
+
+    // MARK: - Equalizer & AirPods 3 Tab
 
     private var equalizerBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                // 1. Master Status + Live Audio Route Card
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
                         HStack(spacing: 6) {
                             Image(systemName: player.isAirPodsConnected ? "airpods.gen3" : "headphones")
                                 .font(.system(size: 14, weight: .bold))
-                                .foregroundColor(player.isAirPodsConnected ? .green : palette.accent)
+                                .foregroundColor(player.isAirPodsConnected ? palette.savedGreen : palette.accent)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(player.audioRouteName)
                                     .font(.system(size: 13.5, weight: .bold))
@@ -1968,7 +1929,7 @@ private struct NowPlayingSheet: View {
                             set: { player.setEQEnabled($0) }
                         ))
                         .labelsHidden()
-                        .tint(palette.accent)
+                        .tint(palette.savedGreen)
                     }
 
                     Divider().opacity(0.3)
@@ -1986,7 +1947,7 @@ private struct NowPlayingSheet: View {
                                 .foregroundColor(palette.textSecondary)
                         }
                     }
-                    .tint(palette.accent)
+                    .tint(palette.savedGreen)
 
                     VStack(spacing: 4) {
                         HStack {
@@ -2011,10 +1972,9 @@ private struct NowPlayingSheet: View {
                 }
                 .padding(12)
                 .background(palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: palette.cardRadius))
-                .overlay(RoundedRectangle(cornerRadius: palette.cardRadius).stroke(palette.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(palette.border, lineWidth: 1))
 
-                // 2. Antipop / Hyperpop & AirPods 3 Presets
                 VStack(alignment: .leading, spacing: 8) {
                     Text("ПРЕСЕТЫ · АНТИПОП / ХАЙПЕРПОП / AIRPODS 3")
                         .font(.system(size: 11, weight: .bold))
@@ -2046,7 +2006,6 @@ private struct NowPlayingSheet: View {
                         .foregroundColor(palette.textSecondary)
                 }
 
-                // 3. Frequency Curve Visualizer + 6-Band Interactive Faders
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("КРИВАЯ ЭКВАЛАЙЗЕРА (6 ПОЛОС)")
@@ -2126,8 +2085,8 @@ private struct NowPlayingSheet: View {
                 }
                 .padding(12)
                 .background(palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: palette.cardRadius))
-                .overlay(RoundedRectangle(cornerRadius: palette.cardRadius).stroke(palette.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(palette.border, lineWidth: 1))
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 22)
