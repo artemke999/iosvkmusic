@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 import MediaPlayer
 import UIKit
@@ -889,6 +889,7 @@ final class AudioPlayerManager: ObservableObject {
         frameCount: AVAudioFrameCount,
         token: UInt64
     ) {
+        let expectedIsA = (node === playerNodeA)
         node.scheduleSegment(
             file,
             startingFrame: startFrame,
@@ -900,7 +901,7 @@ final class AudioPlayerManager: ObservableObject {
                 guard let self,
                       self.usingEngine,
                       self.mainEngineToken == token,
-                      self.activePlayerNode === node,
+                      self.activeIsA == expectedIsA,
                       self.isPlaying,
                       !self.didTriggerTransitionForCurrent else {
                     return

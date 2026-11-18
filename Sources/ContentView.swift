@@ -1647,7 +1647,7 @@ private struct NowPlayingSheet: View {
 
                         HStack(spacing: 8) {
                             Button {
-                                nowPlayingTab = .equalizer
+                                selectedTab = .equalizer
                             } label: {
                                 HStack(spacing: 4) {
                                     Image(systemName: player.isAirPodsConnected ? "airpods.gen3" : "waveform")
@@ -1922,7 +1922,7 @@ private struct NowPlayingSheet: View {
                         .font(.system(size: 14, weight: .bold))
                         .foregroundColor(palette.textPrimary)
                     Button {
-                        nowPlayingTab = .equalizer
+                        selectedTab = .equalizer
                     } label: {
                         Text("Настроить EQ и AirPods 3")
                             .font(.system(size: 12.5, weight: .bold))

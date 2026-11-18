@@ -5,18 +5,18 @@ struct VKWebAuthSheet: View {
     @EnvironmentObject var vkClient: VKAPIClient
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("sqwore_theme") private var rawTheme: String = SqworeThemeMode.evePaper.rawValue
+    @AppStorage("ui_theme") private var rawTheme: String = AppThemeKind.skyShards.rawValue
     @State private var statusMessage: String = "Войдите в аккаунт VK ниже"
     @State private var isExchanging: Bool = false
     @State private var showManualToken: Bool = false
     @State private var manualTokenInput: String = ""
 
-    private var themeMode: SqworeThemeMode {
-        SqworeThemeMode(rawValue: rawTheme) ?? .evePaper
+    private var themeKind: AppThemeKind {
+        AppThemeKind(rawValue: rawTheme) ?? .skyShards
     }
 
-    private var theme: ThemeColors {
-        ThemeColors(themeMode)
+    private var palette: ThemePalette {
+        ThemePalette(themeKind)
     }
 
     var body: some View {
@@ -24,22 +24,21 @@ struct VKWebAuthSheet: View {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(isExchanging ? theme.accentMint : theme.accentButter)
+                        .fill(isExchanging ? Color.green : palette.accent)
                         .frame(width: 7, height: 7)
-                        .overlay(Circle().stroke(theme.ink, lineWidth: 1))
-                    Text(statusMessage.uppercased())
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundColor(theme.textSecondary)
+                    Text(statusMessage)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(palette.textSecondary)
                         .lineLimit(1)
                     Spacer()
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(theme.skyPanel)
+                .background(palette.surface)
                 .overlay(
                     Rectangle()
-                        .fill(theme.ink)
-                        .frame(height: 1.5),
+                        .fill(palette.border)
+                        .frame(height: 1),
                     alignment: .bottom
                 )
 
@@ -65,44 +64,45 @@ struct VKWebAuthSheet: View {
                     Button {
                         withAnimation { showManualToken.toggle() }
                     } label: {
-                        Text(showManualToken ? "СКРЫТЬ РУЧНОЙ ВВОД" : "ИЛИ ВСТАВИТЬ ТОКЕН ВРУЧНУЮ")
-                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                            .foregroundColor(theme.textSecondary)
+                        Text(showManualToken ? "Скрыть ручной ввод" : "Или вставить токен вручную")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundColor(palette.textSecondary)
                     }
 
                     if showManualToken {
                         HStack(spacing: 8) {
                             TextField("vk1.a...", text: $manualTokenInput)
                                 .textFieldStyle(.plain)
-                                .font(.system(size: 12.5, design: .monospaced))
-                                .foregroundColor(theme.textPrimary)
+                                .font(.system(size: 12.5).monospaced())
+                                .foregroundColor(palette.textPrimary)
                                 .padding(9)
-                                .background(theme.paper)
-                                .overlay(Rectangle().stroke(theme.ink, lineWidth: 1.5))
+                                .background(palette.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 9))
+                                .overlay(RoundedRectangle(cornerRadius: 9).stroke(palette.border, lineWidth: 1))
 
-                            Button("ВОЙТИ") {
+                            Button("Войти") {
                                 vkClient.updateManualToken(manualTokenInput)
                                 dismiss()
                             }
-                            .font(.system(size: 11.5, weight: .black, design: .monospaced))
-                            .foregroundColor(theme.buttonTextOnAccent)
-                            .padding(.horizontal, 12)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(palette.pillText)
+                            .padding(.horizontal, 14)
                             .padding(.vertical, 9)
-                            .background(theme.accentSky)
-                            .overlay(Rectangle().stroke(theme.ink, lineWidth: 1.5))
+                            .background(palette.pillBg)
+                            .clipShape(Capsule())
                         }
                     }
                 }
                 .padding(12)
-                .background(theme.canvas)
+                .background(palette.bgBottom)
                 .overlay(
                     Rectangle()
-                        .fill(theme.ink)
-                        .frame(height: 1.5),
+                        .fill(palette.border)
+                        .frame(height: 1),
                     alignment: .top
                 )
             }
-            .background(theme.canvas)
+            .background(palette.bgTop)
             .navigationTitle("Вход в VK")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -111,7 +111,7 @@ struct VKWebAuthSheet: View {
                 }
             }
         }
-        .preferredColorScheme(themeMode.colorScheme)
+        .preferredColorScheme(themeKind.colorScheme)
     }
 }
 
